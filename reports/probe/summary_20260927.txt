@@ -1,0 +1,43 @@
+events=39621 usable=39621 bad_json=0 canary=0 span=17.0 min
+rate/min: mean=2329 min=2062 max=3399 (n_minutes=16)
+events per upstream topic: {None: 1, 'eqiad.mediawiki.recentchange': 39620}
+  eqiad.mediawiki.recentchange: offsets 6554818550..6554858169 (39620 expected), received 39620; non-increasing=0; gap runs=0 missing=0; dup offsets=0
+dup meta.id overall=0
+recv - meta.dt (s): min=-0.084 p50=-0.054 p99=0.736 max=5.432
+
+[timestamp (edit time)]
+  recv delay (s):   p50=1.9 p99=7.7 p99.9=19.5 max=51.7
+  out-of-order: 27574/39621 (69.6%) behind running max
+  disorder (s):     p50=1.0 p99=6.0 p99.9=18.0 p99.99=33.0 max=51.0
+    watermark    5s would drop 475 (1.199%)
+    watermark   30s would drop 5 (0.013%)
+    watermark   60s would drop 0 (0.000%)
+    watermark  120s would drop 0 (0.000%)
+    watermark  300s would drop 0 (0.000%)
+    watermark  600s would drop 0 (0.000%)
+
+[meta.dt (emit time)]
+  recv delay (s):   p50=-0.1 p99=0.7 p99.9=4.3 max=5.4
+  out-of-order: 536/39621 (1.4%) behind running max
+  disorder (s):     p50=0.0 p99=0.0 p99.9=0.0 p99.99=0.0 max=0.0
+    watermark    5s would drop 0 (0.000%)
+    watermark   30s would drop 0 (0.000%)
+    watermark   60s would drop 0 (0.000%)
+    watermark  120s would drop 0 (0.000%)
+    watermark  300s would drop 0 (0.000%)
+    watermark  600s would drop 0 (0.000%)
+
+types: {'categorize': 24126, 'edit': 11849, 'log': 1999, 'new': 1647}
+bot share: 60.4%
+distinct top-level field sets: 5
+   24126  17 fields
+    7531  21 fields
+    5965  20 fields
+    1481  21 fields
+
+distinct wikis=120; top5: commonswiki 30.9%, enwiki 17.5%, arwiktionary 12.9%, zhwikisource 11.3%, wikidatawiki 7.9%
+   3 partitions: max partition share key=wiki 38.8%, key=meta.id 33.4% (ideal 33.3%)
+   6 partitions: max partition share key=wiki 36.2%, key=meta.id 17.1% (ideal 16.7%)
+  12 partitions: max partition share key=wiki 31.9%, key=meta.id 8.7% (ideal 8.3%)
+
+bytes/event: mean=1343 p99=2195 max=7807; ~188 MB/hour, ~4.5 GB/day uncompressed JSON
