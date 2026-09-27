@@ -1,0 +1,35 @@
+[project]
+name = "wikimedia-streaming-pipeline"
+version = "0.1.0"
+description = "Streaming pipeline over live Wikimedia edits: Kafka + schema registry, S3 landing, Databricks Delta bronze/silver/gold."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "confluent-kafka>=2.15,<3",
+    "httpx>=0.27",
+    "boto3>=1.35",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wikistream"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
