@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+budget_alert_email = "you@example.com"
+
+# Second apply, after creating the Databricks storage credential:
+# databricks_external_id = "<external ID shown by Databricks>"
+# self_assume            = true
