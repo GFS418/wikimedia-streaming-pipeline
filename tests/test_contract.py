@@ -9,10 +9,12 @@ import pytest
 from wikistream.contract import (
     DeadLetter,
     Drop,
+    UpstreamPosition,
     Valid,
     canonical_json,
     classify,
     load_schema,
+    upstream_position,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "recentchange_sample.jsonl"
@@ -110,15 +112,18 @@ def test_upstream_field_named_extra_json_does_not_collide_with_ours():
 # ------------------------------------------------------------------ tier 2: drop and count
 
 
-def test_canary_events_are_dropped():
+def test_canary_events_are_dropped_with_their_upstream_position():
     e = base_event()
     e["meta"]["domain"] = "canary"
-    assert classify(raw(e)) == Drop("canary")
+    m = e["meta"]
+    assert classify(raw(e)) == Drop(
+        "canary", UpstreamPosition(m["topic"], m["partition"], m["offset"])
+    )
 
 
 def test_canary_is_dropped_even_if_otherwise_invalid():
     e = {"meta": {"domain": "canary"}}
-    assert classify(raw(e)) == Drop("canary")
+    assert classify(raw(e)) == Drop("canary", None)
 
 
 # --------------------------------------------------------------------- tier 3: dead letter
@@ -192,3 +197,32 @@ def test_dead_letter_key_is_none_when_meta_id_unusable():
     out = classify(raw(e))
     assert isinstance(out, DeadLetter) and out.key is None
     assert out.detail == "meta.id: expected string, got int"
+
+
+# ------------------------------------------------------------- upstream position for audits
+
+
+def test_dead_letter_carries_upstream_position_when_meta_is_intact():
+    e = base_event() | {"timestamp": "bad"}
+    m = e["meta"]
+    out = classify(raw(e))
+    assert out.upstream == UpstreamPosition(m["topic"], m["partition"], m["offset"])
+
+
+def test_unparseable_dead_letter_has_no_position():
+    assert classify(b"{not json").upstream is None
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        None,
+        "text",
+        {"topic": "t", "partition": 0},
+        {"topic": "t", "partition": 0, "offset": "5"},
+        {"topic": "t", "partition": True, "offset": 5},
+        {"topic": 7, "partition": 0, "offset": 5},
+    ],
+)
+def test_upstream_position_is_none_unless_well_typed(meta):
+    assert upstream_position(meta) is None

@@ -26,7 +26,16 @@ from confluent_kafka.serialization import MessageField, SerializationContext, Se
 
 from wikistream import __version__
 from wikistream.config import Settings
-from wikistream.contract import SCHEMA_PATH, DeadLetter, Drop, Valid, classify
+from wikistream.contract import (
+    SCHEMA_PATH,
+    DeadLetter,
+    Drop,
+    UpstreamPosition,
+    Valid,
+    canonical_json,
+    classify,
+    upstream_position,
+)
 from wikistream.cursor import merge_cursors
 from wikistream.sse import SSEClient
 
@@ -34,6 +43,17 @@ log = logging.getLogger("wikistream.producer")
 
 H_CURSOR = "upstream_cursor"
 H_VERSION = "producer_version"
+H_UP_TOPIC, H_UP_PARTITION, H_UP_OFFSET = "upstream_topic", "upstream_partition", "upstream_offset"
+
+
+def upstream_headers(pos: UpstreamPosition | None) -> list[tuple[str, str]]:
+    if pos is None:
+        return []
+    return [
+        (H_UP_TOPIC, pos.topic),
+        (H_UP_PARTITION, str(pos.partition)),
+        (H_UP_OFFSET, str(pos.offset)),
+    ]
 
 
 def producer_config(settings: Settings) -> dict[str, object]:
@@ -61,12 +81,13 @@ class Router:
         self.producer = producer
         self.main = settings.main_topic.name
         self.dlq = settings.dlq_topic.name
+        self.drops = settings.drops_topic.name
         self.serialize = value_serializer
         self.counts: Counter[str] = Counter()
         self.fatal: KafkaException | None = None
 
     def _on_delivery(self, err, msg) -> None:
-        kind = "dlq" if msg.topic() == self.dlq else "main"
+        kind = {self.dlq: "dlq", self.drops: "drops"}.get(msg.topic(), "main")
         if err is None:
             self.counts[f"delivered.{kind}"] += 1
             return
@@ -94,6 +115,7 @@ class Router:
             ("error_detail", dl.detail[:1000]),
             ("failed_at", datetime.now(UTC).isoformat()),
             (H_VERSION, __version__),
+            *upstream_headers(dl.upstream),
         ]
         if cursor:
             headers.append((H_CURSOR, cursor))
@@ -101,12 +123,27 @@ class Router:
         self.counts["dlq"] += 1
         self.counts[f"dlq.{dl.error_class}"] += 1
 
+    def _record_drop(self, cursor: str | None, drop: Drop) -> None:
+        # The ledger (decision D8) holds positions and reasons, not the event itself.
+        pos = drop.upstream
+        entry = {
+            "reason": drop.reason,
+            "upstream_topic": pos.topic if pos else None,
+            "upstream_partition": pos.partition if pos else None,
+            "upstream_offset": pos.offset if pos else None,
+        }
+        headers = [(H_VERSION, __version__), *upstream_headers(pos)]
+        if cursor:
+            headers.append((H_CURSOR, cursor))
+        self._produce(self.drops, None, canonical_json(entry).encode(), headers)
+        self.counts[f"dropped.{drop.reason}"] += 1
+
     def handle(self, data: str | bytes, cursor: str | None) -> None:
         raw = data.encode() if isinstance(data, str) else data
         self.counts["received"] += 1
         outcome = classify(raw)
         if isinstance(outcome, Drop):
-            self.counts[f"dropped.{outcome.reason}"] += 1
+            self._record_drop(cursor, outcome)
             return
         if isinstance(outcome, DeadLetter):
             self._dead_letter(raw, cursor, outcome)
@@ -118,7 +155,14 @@ class Router:
             )
         except SerializationError as exc:  # should be unreachable if contract.py is right
             self._dead_letter(
-                raw, cursor, DeadLetter("serialization_failed", str(exc), outcome.key)
+                raw,
+                cursor,
+                DeadLetter(
+                    "serialization_failed",
+                    str(exc),
+                    outcome.key,
+                    upstream_position(outcome.record["meta"]),
+                ),
             )
             return
         headers = [(H_VERSION, __version__)]
@@ -131,7 +175,7 @@ class Router:
 
 
 def resume_cursor(settings: Settings, timeout_s: float = 10.0) -> str | None:
-    """Furthest upstream cursor found at the tail of every partition of both topics."""
+    """Furthest upstream cursor found at the tail of every partition of all our topics."""
     consumer = Consumer(
         {
             "bootstrap.servers": settings.bootstrap_servers,
@@ -142,7 +186,7 @@ def resume_cursor(settings: Settings, timeout_s: float = 10.0) -> str | None:
     found: list[str] = []
     try:
         md = consumer.list_topics(timeout=timeout_s)
-        for spec in (settings.main_topic, settings.dlq_topic):
+        for spec in settings.all_topics:
             if spec.name not in md.topics:
                 continue
             for p in md.topics[spec.name].partitions:
@@ -175,7 +219,10 @@ def run(
         signal.signal(sig, lambda *_: stop.set())
 
     cursor = None if from_now else resume_cursor(settings)
-    log.info("starting from %s", f"cursor {cursor}" if cursor else "now (no cursor in Kafka)")
+    if cursor:
+        log.info("starting from cursor %s", cursor)
+    else:
+        log.info("starting from now (%s)", "--from-now" if from_now else "no cursor in Kafka")
 
     producer = Producer(producer_config(settings))
     router = Router(producer, settings, make_value_serializer(settings))

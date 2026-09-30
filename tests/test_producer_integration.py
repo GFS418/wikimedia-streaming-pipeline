@@ -44,10 +44,11 @@ def settings(stack, run_id):
     s = Settings(
         main_topic=TopicSpec(f"it-{run_id}.recentchange", 3, DAY_MS),
         dlq_topic=TopicSpec(f"it-{run_id}.recentchange.dlq", 1, DAY_MS),
+        drops_topic=TopicSpec(f"it-{run_id}.recentchange.drops", 1, DAY_MS),
     )
     yield s
     AdminClient({"bootstrap.servers": s.bootstrap_servers}).delete_topics(
-        [s.main_topic.name, s.dlq_topic.name]
+        [t.name for t in s.all_topics]
     )
     sr = SchemaRegistryClient({"url": s.schema_registry_url})
     sr.delete_subject(s.value_subject, permanent=False)
@@ -81,7 +82,7 @@ def test_end_to_end_routing_and_resume(settings):
     result = bootstrap(settings)
     assert result["compatibility"] == "FULL_TRANSITIVE"
     again = bootstrap(settings)  # idempotent: nothing recreated, same schema id
-    assert again[settings.main_topic.name] == again[settings.dlq_topic.name] == "exists"
+    assert all(again[t.name] == "exists" for t in settings.all_topics)
     assert again["schema_id"] == result["schema_id"]
 
     real = FIXTURE.read_text().splitlines()
@@ -106,7 +107,7 @@ def test_end_to_end_routing_and_resume(settings):
     n_valid = len(real) + 1
     assert router.counts["main"] == router.counts["delivered.main"] == n_valid
     assert router.counts["dlq"] == router.counts["delivered.dlq"] == len(faults)
-    assert router.counts["dropped.canary"] == 1
+    assert router.counts["dropped.canary"] == router.counts["delivered.drops"] == 1
     assert router.counts["extra_field.brand_new_field"] == 1
     assert router.counts["received"] == len(inputs)
 
@@ -131,6 +132,22 @@ def test_end_to_end_routing_and_resume(settings):
         assert by_class[cls].value() == data.encode()
     assert by_class["type_mismatch"].key().decode() == base["meta"]["id"]
     assert by_class["invalid_json"].key() is None
+    # Dead letters with intact meta carry their upstream position; broken JSON cannot.
+    tm = {k: v.decode() for k, v in by_class["type_mismatch"].headers()}
+    assert (tm["upstream_topic"], int(tm["upstream_offset"])) == (
+        base["meta"]["topic"],
+        base["meta"]["offset"],
+    )
+    assert "upstream_offset" not in dict(by_class["invalid_json"].headers())
+
+    # Drops ledger (decision D8): position and reason only, never the event body.
+    (drop,) = read_all(settings, settings.drops_topic.name, 1)
+    assert json.loads(drop.value()) == {
+        "reason": "canary",
+        "upstream_topic": base["meta"]["topic"],
+        "upstream_partition": base["meta"]["partition"],
+        "upstream_offset": base["meta"]["offset"],
+    }
 
     # Resume (decision B): furthest cursor across the tails of all 4 partitions. The
     # last input (index len-1) was valid, so it is the furthest position overall.

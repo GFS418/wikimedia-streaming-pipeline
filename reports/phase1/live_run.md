@@ -35,3 +35,20 @@ that is why the codfw position appears in the resume cursor.
   claim (decision A) stands, and the Phase 4 kill drill measures it under a hard kill
   rather than a clean stop.
 - The audit could not explain the canary gap on its own; it took a manual upstream replay.
+
+## Run 3: after adding the drops ledger (decision D8)
+
+`wikistream-producer --from-now --max-seconds 240`, 2026-09-30 23:27:24 to 23:31:24 UTC,
+then `scripts/audit_topic.py --since 2026-09-30T23:27:24Z`:
+
+| Measure | Value |
+|---|---|
+| Delivered to main | 9,253 (about 2,313/min) |
+| Dead letters / drops | 0 / 0 |
+| Distinct `meta.id` | 9,253; duplicates 0 |
+| eqiad offsets 6570366884..6570376135 | 9,252 expected, 9,252 accounted, 0 missing |
+| codfw | 1 event, accounted |
+| Verdict | **reconciled** (exit code 0) |
+
+No canary arrived in this window, so the ledger's live path is not yet observed; it is
+covered by `tests/test_producer_integration.py` and will be exercised by the 24 h capture.

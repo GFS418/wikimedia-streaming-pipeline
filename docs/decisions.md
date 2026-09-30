@@ -84,3 +84,19 @@ Each entry: the decision, the evidence it rests on, and what it costs. Newest la
 - **Evidence:** 0 malformed and 0 canary events in 39,621 probed, so the dead-letter path
   must be exercised with injected faults. `id` is absent on some log events
   (`abusefilter`, `thanks`, `patrol`), which is legitimate, so it is nullable.
+
+## D8. Drops ledger and offset reconciliation (2026-09-30)
+
+- **Decision:** every deliberately dropped event (canaries) writes a small JSON record
+  (reason + upstream topic/partition/offset) to `wikistream.recentchange.drops`
+  (1 partition, 30-day retention); dead letters carry the upstream position in headers
+  when their `meta` is intact. `wikistream/audit.py` then reconciles every upstream offset:
+  delivered + dead-lettered + dropped, with duplicates and cross-source conflicts reported
+  separately.
+- **Evidence:** the first live run left one unexplained upstream gap (6570336730) that
+  took a manual replay of upstream history to identify as a canary. With the ledger, the
+  audit closes such gaps on its own (`tests/test_audit.py` reproduces that exact case).
+- **Cost:** a third topic; JSON rather than Avro for the ledger (an internal operations
+  log, so a second registry subject would be process without benefit). Dead letters whose
+  JSON is unparseable have no position; the audit can only bound them
+  (`explainable_by_unattributed_dlq`).

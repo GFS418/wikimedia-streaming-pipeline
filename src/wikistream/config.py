@@ -45,7 +45,18 @@ class Settings:
             _env("DLQ_TOPIC", "wikistream.recentchange.dlq"), 1, 30 * DAY_MS
         )
     )
+    # Decision D8: one small JSON record per deliberately dropped event (canaries), so the
+    # audit can account for every upstream offset: delivered + dead-lettered + dropped.
+    drops_topic: TopicSpec = field(
+        default_factory=lambda: TopicSpec(
+            _env("DROPS_TOPIC", "wikistream.recentchange.drops"), 1, 30 * DAY_MS
+        )
+    )
     compatibility: str = "FULL_TRANSITIVE"  # decision D6
+
+    @property
+    def all_topics(self) -> tuple[TopicSpec, ...]:
+        return (self.main_topic, self.dlq_topic, self.drops_topic)
 
     @property
     def value_subject(self) -> str:

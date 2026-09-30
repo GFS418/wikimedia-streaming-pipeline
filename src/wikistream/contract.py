@@ -37,15 +37,26 @@ class Valid:
 
 
 @dataclass(frozen=True)
+class UpstreamPosition:
+    """Where an event sat in Wikimedia's own Kafka (meta.topic/partition/offset)."""
+
+    topic: str
+    partition: int
+    offset: int
+
+
+@dataclass(frozen=True)
 class DeadLetter:
     error_class: str  # invalid_json | not_an_object | missing_required | type_mismatch
     detail: str
     key: str | None = None
+    upstream: UpstreamPosition | None = None  # None when the event is too broken to tell
 
 
 @dataclass(frozen=True)
 class Drop:
     reason: str  # canary
+    upstream: UpstreamPosition | None = None
 
 
 Outcome = Valid | DeadLetter | Drop
@@ -56,6 +67,15 @@ class _Invalid(Exception):
         super().__init__(detail)
         self.error_class = error_class
         self.detail = detail
+
+
+def upstream_position(meta: Any) -> UpstreamPosition | None:
+    """Best-effort upstream position, so every outcome can be reconciled by offset."""
+    if not isinstance(meta, dict):
+        return None
+    t, p, o = meta.get("topic"), meta.get("partition"), meta.get("offset")
+    ints = all(isinstance(x, int) and not isinstance(x, bool) for x in (p, o))
+    return UpstreamPosition(t, p, o) if isinstance(t, str) and ints else None
 
 
 def load_schema(path: Path = SCHEMA_PATH) -> dict[str, Any]:
@@ -130,8 +150,9 @@ def classify(raw: bytes | str, schema: dict[str, Any] | None = None) -> Outcome:
 
     meta = event.get("meta")
     key = meta.get("id") if isinstance(meta, dict) and isinstance(meta.get("id"), str) else None
+    upstream = upstream_position(meta)
     if isinstance(meta, dict) and meta.get("domain") == "canary":
-        return Drop("canary")
+        return Drop("canary", upstream)
 
     # Apply the two deliberate upstream-to-contract mappings before validation.
     mapped = dict(event)
@@ -150,7 +171,7 @@ def classify(raw: bytes | str, schema: dict[str, Any] | None = None) -> Outcome:
     try:
         record = _conform_record(schema, mapped, "", extras)
     except _Invalid as exc:
-        return DeadLetter(exc.error_class, exc.detail, key)
+        return DeadLetter(exc.error_class, exc.detail, key, upstream)
     record["_extra_json"] = canonical_json(extras) if extras else None
     return Valid(record=record, key=record["meta"]["id"], extra_fields=sorted(extras))
 

@@ -45,10 +45,7 @@ def bootstrap(settings: Settings | None = None) -> dict[str, object]:
     s = settings or Settings()
     admin = AdminClient({"bootstrap.servers": s.bootstrap_servers})
     sr = SchemaRegistryClient({"url": s.schema_registry_url})
-    result: dict[str, object] = {
-        s.main_topic.name: ensure_topic(admin, s.main_topic),
-        s.dlq_topic.name: ensure_topic(admin, s.dlq_topic),
-    }
+    result: dict[str, object] = {t.name: ensure_topic(admin, t) for t in s.all_topics}
     schema_id = ensure_schema(sr, s.value_subject, SCHEMA_PATH.read_text(), s.compatibility)
     result["schema_id"] = schema_id
     result["compatibility"] = sr.get_compatibility(s.value_subject)
