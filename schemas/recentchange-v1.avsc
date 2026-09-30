@@ -1,0 +1,54 @@
+{
+  "type": "record",
+  "name": "RecentChange",
+  "namespace": "io.github.gfs418.wikistream",
+  "doc": "One Wikimedia recentchange event (upstream /mediawiki/recentchange/1.0.0), mapped to our contract. Required fields are those the key, dedup, event time and gold aggregates depend on (decision D7); everything else is nullable because upstream guarantees almost nothing.",
+  "fields": [
+    {"name": "meta", "type": {
+      "type": "record", "name": "Meta", "fields": [
+        {"name": "id", "type": "string", "doc": "Unique event ID (UUID). Kafka key and silver dedup key."},
+        {"name": "dt", "type": "string", "doc": "Upstream emit time, ISO-8601 UTC."},
+        {"name": "domain", "type": ["null", "string"], "default": null},
+        {"name": "stream", "type": ["null", "string"], "default": null},
+        {"name": "topic", "type": ["null", "string"], "default": null, "doc": "Upstream Kafka topic (eqiad or codfw datacenter)."},
+        {"name": "partition", "type": ["null", "int"], "default": null},
+        {"name": "offset", "type": ["null", "long"], "default": null, "doc": "Offset within the upstream topic; used for continuity audits."},
+        {"name": "uri", "type": ["null", "string"], "default": null},
+        {"name": "request_id", "type": ["null", "string"], "default": null}
+      ]}},
+    {"name": "type", "type": "string", "doc": "edit | new | log | categorize | external. Free string upstream; unknown values are flagged in silver, not rejected."},
+    {"name": "wiki", "type": "string"},
+    {"name": "timestamp", "type": "long", "doc": "Edit time, unix seconds. Event time for watermarks (decision D3)."},
+    {"name": "bot", "type": "boolean"},
+    {"name": "id", "type": ["null", "long"], "default": null, "doc": "Recentchange row ID; absent on some log events."},
+    {"name": "namespace", "type": ["null", "int"], "default": null},
+    {"name": "title", "type": ["null", "string"], "default": null},
+    {"name": "title_url", "type": ["null", "string"], "default": null},
+    {"name": "comment", "type": ["null", "string"], "default": null},
+    {"name": "parsedcomment", "type": ["null", "string"], "default": null},
+    {"name": "user", "type": ["null", "string"], "default": null},
+    {"name": "minor", "type": ["null", "boolean"], "default": null},
+    {"name": "patrolled", "type": ["null", "boolean"], "default": null},
+    {"name": "notify_url", "type": ["null", "string"], "default": null},
+    {"name": "length", "type": ["null", {
+      "type": "record", "name": "LengthChange", "fields": [
+        {"name": "old", "type": ["null", "long"], "default": null},
+        {"name": "new", "type": ["null", "long"], "default": null}
+      ]}], "default": null},
+    {"name": "revision", "type": ["null", {
+      "type": "record", "name": "RevisionChange", "fields": [
+        {"name": "old", "type": ["null", "long"], "default": null},
+        {"name": "new", "type": ["null", "long"], "default": null}
+      ]}], "default": null},
+    {"name": "server_url", "type": ["null", "string"], "default": null},
+    {"name": "server_name", "type": ["null", "string"], "default": null},
+    {"name": "server_script_path", "type": ["null", "string"], "default": null},
+    {"name": "log_id", "type": ["null", "long"], "default": null},
+    {"name": "log_type", "type": ["null", "string"], "default": null},
+    {"name": "log_action", "type": ["null", "string"], "default": null},
+    {"name": "log_action_comment", "type": ["null", "string"], "default": null},
+    {"name": "log_params_json", "type": ["null", "string"], "default": null, "doc": "Upstream log_params (array, object or string) as canonical JSON (sorted keys)."},
+    {"name": "upstream_schema", "type": ["null", "string"], "default": null, "doc": "Upstream $schema URI, e.g. /mediawiki/recentchange/1.0.0."},
+    {"name": "_extra_json", "type": ["null", "string"], "default": null, "doc": "Upstream fields not in this schema, as canonical JSON keyed by dotted path. Nothing is dropped silently; a recurring key here is the signal to evolve the schema."}
+  ]
+}

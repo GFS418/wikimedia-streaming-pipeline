@@ -63,6 +63,12 @@ Each entry: the decision, the evidence it rests on, and what it costs. Newest la
   the old consumer runs (forward).
 - **Cost:** only optional fields with defaults can be added or removed; no required
   additions, no in-place renames.
+- **Verified on the registry** (`tests/test_registry_compat.py`): add/remove optional field
+  accepted; add required, remove required, narrow long to int rejected. A v3 that re-adds
+  a removed field with a different type is accepted under FULL but rejected under
+  FULL_TRANSITIVE. Caveat: renaming an optional field is **accepted** (it is structurally
+  an add plus a remove) and old data would silently read as null, so renames follow an
+  add-then-deprecate policy; the registry check is structural, not semantic.
 
 ## D7. Three-tier bad-data handling + `_extra_json` (2026-09-30)
 

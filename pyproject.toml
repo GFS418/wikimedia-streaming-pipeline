@@ -5,10 +5,13 @@ description = "Streaming pipeline over live Wikimedia edits: Kafka + schema regi
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "confluent-kafka>=2.15,<3",
+    "confluent-kafka[avro,schemaregistry]>=2.15,<3",
     "httpx>=0.27",
     "boto3>=1.35",
 ]
+
+[project.scripts]
+wikistream-producer = "wikistream.producer:main"
 
 [dependency-groups]
 dev = [
@@ -26,6 +29,8 @@ packages = ["src/wikistream"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["integration: needs the local Kafka + Schema Registry stack (docker compose up)"]
+filterwarnings = ["ignore:The httpx module is deprecated"]
 
 [tool.ruff]
 line-length = 100
@@ -33,3 +38,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Databricks notebooks: spark/dbutils are injected globals; cells import mid-file.
+"databricks/*.py" = ["F821", "E402"]
