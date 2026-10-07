@@ -54,6 +54,16 @@ class Settings:
     )
     compatibility: str = "FULL_TRANSITIVE"  # decision D6
 
+    # Landing zone (decisions D9-D12). Bucket name is a Terraform output, not a secret.
+    landing_bucket: str = field(
+        default_factory=lambda: _env("LANDING_BUCKET", "wikistream-landing-060647991548")
+    )
+    landing_prefix: str = "landing/recentchange/"
+    offsets_per_file: int = 5000
+    gzip_level: int = 5
+    consumer_group: str = "wikistream-landing"
+    aws_profile: str = field(default_factory=lambda: _env("AWS_PROFILE", "wikistream-consumer"))
+
     @property
     def all_topics(self) -> tuple[TopicSpec, ...]:
         return (self.main_topic, self.dlq_topic, self.drops_topic)

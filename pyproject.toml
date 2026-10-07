@@ -12,9 +12,11 @@ dependencies = [
 
 [project.scripts]
 wikistream-producer = "wikistream.producer:main"
+wikistream-consumer = "wikistream.consumer:main"
 
 [dependency-groups]
 dev = [
+    "moto[s3]>=5",
     "pytest>=8",
     "ruff>=0.6",
 ]

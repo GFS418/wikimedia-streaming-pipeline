@@ -8,6 +8,15 @@ variable "landing_retention_days" {
   description = "Days before landed files expire. Bronze Delta is the durable copy; this only bounds replay-from-S3."
   type        = number
   default     = 30
+  validation {
+    # S3 is the consumer's record of progress (D11). If files expired while Kafka still
+    # held those offsets, the consumer would re-ingest them. Kafka deletes whole segments
+    # once their NEWEST record passes retention.ms, so a record can live up to
+    # retention.ms + segment.ms: 7 + 7 = 14 days for wikistream.recentchange (observed
+    # 2026-10-07: a 9/30 record shared a segment with 10/7 records).
+    condition     = var.landing_retention_days > 14
+    error_message = "landing_retention_days must exceed Kafka's worst-case retention of wikistream.recentchange (retention.ms + segment.ms = 14 days)."
+  }
 }
 
 variable "noncurrent_retention_days" {
@@ -44,4 +53,10 @@ variable "budget_alert_email" {
   description = "Email for budget alerts. Empty disables the budget."
   type        = string
   default     = ""
+}
+
+variable "consumer_principal_arn" {
+  description = "IAM principal allowed to assume wikistream-consumer. Null = the identity running Terraform."
+  type        = string
+  default     = null
 }

@@ -100,3 +100,55 @@ Each entry: the decision, the evidence it rests on, and what it costs. Newest la
   log, so a second registry subject would be process without benefit). Dead letters whose
   JSON is unparseable have no position; the audit can only bound them
   (`explainable_by_unattributed_dlq`).
+
+## D9. Files cut at fixed offset boundaries (2026-09-30)
+
+- **Decision:** file *k* of a partition holds offsets `k*N .. k*N+N-1`, whatever the time.
+  No time-based flush.
+- **Why:** a crash can never produce two differently named files covering the same
+  offsets, so Kafka -> bronze stays exactly-once per offset. With a time flush, a range
+  written as 100-149 before a crash could be rewritten as 100-199 after it; Auto Loader
+  would ingest 100-149 twice.
+- **Cost:** when traffic stops (e.g. the producer is stopped), the last partial range per
+  partition waits in Kafka until more events arrive. Delayed, never lost.
+
+## D10. 5,000 offsets per file, gzip level 5 (2026-09-30)
+
+- **Evidence** (5,000 real rows from the topic): canonical JSONL rows average 1,948 B;
+  gzip-5 gives 8.04x in a median 44 ms per file vs gzip-6 8.24x in 53 ms. At about 771
+  events/min per partition a file fills in about 6.5 min; about 666 files/day. 30-day
+  storage if run continuously: about 24 GB, $0.56/month (uncompressed would be about
+  195 GB, about $4.50/month, nearly the whole $5 budget).
+- **Determinism:** gzip with `mtime=0` produced identical bytes across runs; with the
+  default mtime it did not. The correctness requirement is identical *decompressed*
+  content per key (Auto Loader skips a processed path); identical bytes are what the
+  drills check via ETags, and hold for the same zlib (1.2.12 here).
+
+## D11. S3 is the consumer's record of progress (2026-09-30)
+
+- **Decision:** no Kafka offset commits. On partition assignment the consumer lists its
+  S3 prefix for that partition and resumes after the highest range written. An S3 PUT is
+  atomic, so the write *is* the commit; there is no "written but not committed" window.
+- **Why:** self-contained; one source of truth for what reached the landing zone.
+- **Costs and invariants:** the consumer needs `s3:ListBucket` on its prefix. S3
+  retention (30 days) must exceed Kafka's *worst-case* retention, or expired files would make
+  the consumer re-ingest offsets Kafka still holds; enforced by a Terraform validation. Kafka's
+  standard lag tooling sees no committed offsets, so Phase 4 computes lag as
+  high watermark minus the S3-derived position.
+- **Correction (2026-10-07):** the bound was first stated as Kafka's 7-day `retention.ms`.
+  Kafka deletes whole segments once their newest record passes retention, and rolls segments
+  every `segment.ms` (7 days), so a record can survive up to 14 days; observed live when
+  2026-09-30 records shared a segment with 2026-10-07 records
+  ([`reports/phase2/live_run.md`](../reports/phase2/live_run.md)). The validation now
+  requires more than 14 days.
+
+## D12. Key layout, row envelope, upload-only role (2026-09-30)
+
+- **Keys:** `landing/recentchange/p{partition:02d}/{start:020d}-{end:020d}.jsonl.gz`.
+  Zero-padded so lexical order is numeric; no `key=value` directories, which Auto Loader
+  would infer as partition columns.
+- **Rows:** `{"kafka": {topic, partition, offset, timestamp_ms, key, schema_id, headers},
+  "value": {...Avro record...}}`, canonical JSON. Every field is immutable per offset;
+  deliberately no write time.
+- **Credentials:** role `wikistream-consumer` (Terraform): `s3:PutObject` on
+  `landing/recentchange/*` and `s3:ListBucket` on that prefix only. No read, no delete.

@@ -11,3 +11,8 @@ output "databricks_role_arn" {
   description = "Paste into the Databricks storage credential."
   value       = aws_iam_role.databricks_uc.arn
 }
+
+output "consumer_role_arn" {
+  description = "role_arn for the wikistream-consumer AWS CLI profile."
+  value       = aws_iam_role.consumer.arn
+}

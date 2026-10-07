@@ -167,6 +167,58 @@ resource "aws_iam_role_policy" "databricks_read_landing" {
   policy = data.aws_iam_policy_document.databricks_read_landing.json
 }
 
+# ------------------------------------------------------------ local consumer role
+#
+# The laptop consumer writes offset-range files under landing/recentchange/ and finds
+# its position by LISTING that prefix (decision D11: S3 is the record). It can create
+# objects and list its own prefix, nothing else: no read, no delete, no other prefix.
+# Assumed from the identity that runs Terraform (or var.consumer_principal_arn) via an
+# AWS CLI profile with role_arn + source_profile.
+
+locals {
+  consumer_prefix = "landing/recentchange/"
+}
+
+data "aws_iam_policy_document" "consumer_trust" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "AWS"
+      identifiers = [coalesce(var.consumer_principal_arn, data.aws_caller_identity.current.arn)]
+    }
+  }
+}
+
+resource "aws_iam_role" "consumer" {
+  name                 = "wikistream-consumer"
+  assume_role_policy   = data.aws_iam_policy_document.consumer_trust.json
+  max_session_duration = 3600
+}
+
+data "aws_iam_policy_document" "consumer_write_landing" {
+  statement {
+    sid       = "PutLandingFiles"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.landing.arn}/${local.consumer_prefix}*"]
+  }
+  statement {
+    sid       = "ListOwnPrefix"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.landing.arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["${local.consumer_prefix}*"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "consumer_write_landing" {
+  name   = "write-landing-recentchange"
+  role   = aws_iam_role.consumer.id
+  policy = data.aws_iam_policy_document.consumer_write_landing.json
+}
+
 # ---------------------------------------------------------------- cost guardrail
 #
 # Scoped to resources tagged project=wikistream. The tag must be activated as a
