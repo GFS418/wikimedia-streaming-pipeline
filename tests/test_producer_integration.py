@@ -154,3 +154,24 @@ def test_end_to_end_routing_and_resume(settings):
     tails = Counter(m.partition() for m in main)
     assert sum(tails.values()) == n_valid
     assert resume_cursor(settings) == merge_cursors([cursor_at(1_000_000 + len(inputs) - 1)])
+
+
+def test_run_refuses_a_stale_cursor_before_connecting_anywhere(settings, monkeypatch):
+    import time as _time
+
+    from wikistream import producer as producer_mod
+
+    bootstrap(settings)
+    week_ago_ms = int(_time.time() * 1000) - 8 * 24 * 3600 * 1000
+    p = Producer(producer_config(settings))
+    router = Router(p, settings, make_value_serializer(settings))
+    router.handle(FIXTURE.read_text().splitlines()[0], cursor_at(week_ago_ms))
+    assert p.flush(30) == 0
+
+    def no_network(*args, **kwargs):  # the refusal must come before any upstream connection
+        raise AssertionError("SSEClient was constructed despite a stale cursor")
+
+    monkeypatch.setattr(producer_mod, "SSEClient", no_network)
+    with pytest.raises(producer_mod.StaleCursor) as exc:
+        producer_mod.run(settings, max_seconds=1)
+    assert exc.value.age_s > 7 * 24 * 3600

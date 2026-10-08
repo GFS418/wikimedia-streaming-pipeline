@@ -86,12 +86,13 @@ def expected_ranges(s: Settings) -> set[tuple[int, int, int]]:
 def test_lands_every_full_range_once_with_exact_contents(env):
     s, s3 = env
     produce(s, events(200, "a"))
-    counts = LandingConsumer(s, s3).run(max_seconds=8)
+    counts = LandingConsumer(s, s3).run(until_caught_up=True, max_seconds=60)
 
     files = landed(s3)
     ranges = {parse_key(k) for k in files}
     assert ranges == expected_ranges(s)  # every full range, nothing partial
     assert counts["files"] == len(files)
+    assert counts["exited_caught_up"] == 1  # stopped on the condition, not the timeout
     assert counts["rows"] + counts["partial_rows_at_exit"] == 200
     # Shutdown revokes partitions too; those rows must not be counted a second time.
     assert counts["partial_rows_discarded_on_rebalance"] == 0
@@ -107,17 +108,17 @@ def test_lands_every_full_range_once_with_exact_contents(env):
 def test_resume_from_s3_writes_nothing_twice_and_continues(env):
     s, s3 = env
     produce(s, events(150, "b"))
-    LandingConsumer(s, s3).run(max_seconds=8)
+    LandingConsumer(s, s3).run(until_caught_up=True, max_seconds=60)
     first = landed(s3)
 
     # Restart with nothing new: position comes from S3, so no file is written again.
-    again = LandingConsumer(s, s3).run(max_seconds=6)
+    again = LandingConsumer(s, s3).run(until_caught_up=True, max_seconds=60)
     assert again["files"] == 0
     assert landed(s3) == first
 
     # New events: only the new ranges land; earlier files untouched.
     produce(s, events(150, "c"))
-    LandingConsumer(s, s3).run(max_seconds=8)
+    LandingConsumer(s, s3).run(until_caught_up=True, max_seconds=60)
     after = landed(s3)
     assert {k: after[k] for k in first} == first
     assert {parse_key(k) for k in after} == expected_ranges(s)
@@ -128,16 +129,16 @@ def test_interrupted_run_produces_byte_identical_files_to_an_uninterrupted_one(e
     produce(s, events(240, "d"))
 
     # Interrupted: stop after 2 files (partial buffers discarded), then resume twice.
-    LandingConsumer(s, s3).run(max_files=2, max_seconds=8)
-    LandingConsumer(s, s3).run(max_files=3, max_seconds=8)
-    LandingConsumer(s, s3).run(max_seconds=8)
+    LandingConsumer(s, s3).run(max_files=2, max_seconds=60)
+    LandingConsumer(s, s3).run(max_files=3, max_seconds=60)
+    LandingConsumer(s, s3).run(until_caught_up=True, max_seconds=60)
     interrupted = landed(s3)
 
     # Reference: same topic, fresh bucket, fresh group, one uninterrupted run.
     for key in interrupted:
         s3.delete_object(Bucket=BUCKET, Key=key)
     ref = Settings(**{**s.__dict__, "consumer_group": s.consumer_group + "-ref"})
-    LandingConsumer(ref, s3).run(max_seconds=8)
+    LandingConsumer(ref, s3).run(until_caught_up=True, max_seconds=60)
     uninterrupted = landed(s3)
 
     assert interrupted == uninterrupted  # same keys, same bytes
@@ -149,7 +150,7 @@ def test_verifier_passes_a_clean_landing_and_catches_tampering(env):
 
     s, s3 = env
     produce(s, events(90, "e"))
-    LandingConsumer(s, s3).run(max_seconds=8)
+    LandingConsumer(s, s3).run(until_caught_up=True, max_seconds=60)
 
     clean = verify(s, s3)
     assert clean["verdict"] == "ok", clean["failures"]

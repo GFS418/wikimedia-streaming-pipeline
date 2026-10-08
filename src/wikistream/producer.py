@@ -36,7 +36,7 @@ from wikistream.contract import (
     classify,
     upstream_position,
 )
-from wikistream.cursor import merge_cursors
+from wikistream.cursor import cursor_newest_ms, merge_cursors
 from wikistream.sse import SSEClient
 
 log = logging.getLogger("wikistream.producer")
@@ -207,22 +207,70 @@ def resume_cursor(settings: Settings, timeout_s: float = 10.0) -> str | None:
     return merge_cursors(found)
 
 
+DEFAULT_MAX_CURSOR_AGE_S = 30 * 60
+
+
+class StaleCursor(RuntimeError):
+    """Resuming would replay more upstream history than allowed without an explicit choice."""
+
+    def __init__(self, age_s: float | None, max_age_s: float):
+        self.age_s, self.max_age_s = age_s, max_age_s
+        if age_s is None:
+            age = "of unknown age"
+        elif age_s < 2 * 3600:
+            age = f"{age_s / 60:.0f} min old"
+        else:
+            age = f"{age_s / 3600:.1f} h old"
+        super().__init__(
+            f"resume cursor is {age} (limit {max_age_s / 60:.0f} min); resuming would replay "
+            "that much upstream history. Re-run with --catch-up to replay it, or --from-now "
+            "to skip it (the audit will then show the gap)."
+        )
+
+
+def choose_start(
+    cursor: str | None,
+    now_ms: int,
+    max_age_s: float = DEFAULT_MAX_CURSOR_AGE_S,
+    from_now: bool = False,
+    catch_up: bool = False,
+) -> str | None:
+    """Where to start (decision D13): the cursor to resume from, or None for "now".
+
+    A stale cursor (the producer was down longer than max_age_s) is never resumed
+    silently: replaying days of upstream history must be a deliberate choice.
+    """
+    if from_now and catch_up:
+        raise ValueError("--from-now and --catch-up are mutually exclusive")
+    if from_now or cursor is None:
+        return None
+    newest = cursor_newest_ms(cursor)
+    age_s = None if newest is None else (now_ms - newest) / 1000
+    if catch_up or (age_s is not None and age_s <= max_age_s):
+        return cursor
+    raise StaleCursor(age_s, max_age_s)
+
+
 def run(
     settings: Settings,
     max_events: int | None = None,
     max_seconds: float | None = None,
     from_now: bool = False,
     stats_every_s: float = 60.0,
+    catch_up: bool = False,
+    max_cursor_age_s: float = DEFAULT_MAX_CURSOR_AGE_S,
 ) -> Counter[str]:
+    # Decide where to start before touching anything else, so a refusal has no side effects.
+    stored = None if from_now else resume_cursor(settings)
+    cursor = choose_start(stored, int(time.time() * 1000), max_cursor_age_s, from_now, catch_up)
+    if cursor:
+        log.info("starting from cursor %s%s", cursor, " (--catch-up)" if catch_up else "")
+    else:
+        log.info("starting from now (%s)", "--from-now" if from_now else "no cursor in Kafka")
+
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
-
-    cursor = None if from_now else resume_cursor(settings)
-    if cursor:
-        log.info("starting from cursor %s", cursor)
-    else:
-        log.info("starting from now (%s)", "--from-now" if from_now else "no cursor in Kafka")
 
     producer = Producer(producer_config(settings))
     router = Router(producer, settings, make_value_serializer(settings))
@@ -255,13 +303,34 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--max-events", type=int)
     ap.add_argument("--max-seconds", type=float)
-    ap.add_argument("--from-now", action="store_true", help="ignore the cursor stored in Kafka")
+    start = ap.add_mutually_exclusive_group()
+    start.add_argument("--from-now", action="store_true", help="ignore the cursor stored in Kafka")
+    start.add_argument(
+        "--catch-up", action="store_true", help="resume even from a stale cursor (replay backlog)"
+    )
+    ap.add_argument(
+        "--max-cursor-age-minutes",
+        type=float,
+        default=DEFAULT_MAX_CURSOR_AGE_S / 60,
+        help="refuse to resume silently from an older cursor (default: %(default)s)",
+    )
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(
         level=args.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
-    counts = run(Settings(), args.max_events, args.max_seconds, args.from_now)
+    try:
+        counts = run(
+            Settings(),
+            args.max_events,
+            args.max_seconds,
+            args.from_now,
+            catch_up=args.catch_up,
+            max_cursor_age_s=args.max_cursor_age_minutes * 60,
+        )
+    except StaleCursor as exc:
+        log.error("%s", exc)
+        raise SystemExit(2) from None
     if counts["undelivered_at_exit"] or any(k.startswith("delivery_failed") for k in counts):
         raise SystemExit(1)
 

@@ -47,3 +47,9 @@ def merge_cursors(cursors: Iterable[str | None]) -> str | None:
         return None
     ordered = [best[k] for k in sorted(best)]
     return json.dumps(ordered, sort_keys=True, separators=(",", ":"))
+
+
+def cursor_newest_ms(cursor: str) -> int | None:
+    """Newest upstream timestamp in a cursor: roughly when the producer last wrote."""
+    stamps = [int(e["timestamp"]) for e in _parse(cursor) if "timestamp" in e]
+    return max(stamps) if stamps else None

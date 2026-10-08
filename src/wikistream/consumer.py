@@ -164,7 +164,7 @@ class LandingConsumer:
             nxt = low if end is None else end + 1
             if nxt < low:
                 # Only if the consumer was down longer than Kafka kept the data: at least
-                # retention.ms (7 days), at most retention.ms + segment.ms (14 days).
+                # retention.ms (7 days), at most retention.ms + segment.ms (8 days, D14).
                 self.counts["expired_before_landing"] += low - nxt
                 log.error(
                     "p%d: offsets %d..%d expired from Kafka before landing",
@@ -195,7 +195,26 @@ class LandingConsumer:
         self.counts["bytes"] += len(body)
         log.info("landed %s (%d rows, %d bytes)", key, len(buf.rows), len(body))
 
-    def run(self, max_files: int | None = None, max_seconds: float | None = None) -> Counter[str]:
+    def caught_up(self) -> bool:
+        """Every assigned partition has consumed up to Kafka's current high watermark.
+
+        Incomplete ranges are still unwritten (D9); caught up means nothing left to read.
+        """
+        if not self.buffers:
+            return False  # not assigned yet
+        for p, buf in self.buffers.items():
+            tp = TopicPartition(self.s.main_topic.name, p)
+            _, high = self.consumer.get_watermark_offsets(tp, timeout=10, cached=False)
+            if buf.next_offset < high:
+                return False
+        return True
+
+    def run(
+        self,
+        max_files: int | None = None,
+        max_seconds: float | None = None,
+        until_caught_up: bool = False,
+    ) -> Counter[str]:
         self.consumer.subscribe(
             [self.s.main_topic.name], on_assign=self._on_assign, on_revoke=self._on_revoke
         )
@@ -206,6 +225,9 @@ class LandingConsumer:
                     break
                 msg = self.consumer.poll(1.0)
                 if msg is None:
+                    if until_caught_up and self.caught_up():
+                        self.counts["exited_caught_up"] = 1
+                        break
                     continue
                 if msg.error():
                     if msg.error().code() == KafkaError._PARTITION_EOF:
@@ -233,6 +255,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Land the main topic on S3 (decisions D9-D12).")
     ap.add_argument("--max-files", type=int)
     ap.add_argument("--max-seconds", type=float)
+    ap.add_argument(
+        "--until-caught-up",
+        action="store_true",
+        help="exit once everything currently in Kafka has been read (incomplete ranges wait)",
+    )
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(
@@ -243,7 +270,7 @@ def main() -> None:
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
-    LandingConsumer(s, s3, stop).run(args.max_files, args.max_seconds)
+    LandingConsumer(s, s3, stop).run(args.max_files, args.max_seconds, args.until_caught_up)
 
 
 if __name__ == "__main__":

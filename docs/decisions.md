@@ -152,3 +152,31 @@ Each entry: the decision, the evidence it rests on, and what it costs. Newest la
   deliberately no write time.
 - **Credentials:** role `wikistream-consumer` (Terraform): `s3:PutObject` on
   `landing/recentchange/*` and `s3:ListBucket` on that prefix only. No read, no delete.
+
+## D13. Never resume silently from a stale upstream cursor (2026-10-07)
+
+- **Decision:** before connecting upstream, the producer compares the newest timestamp in
+  its Kafka-derived cursor with the clock. Older than 30 minutes (`--max-cursor-age-minutes`)
+  means it refuses (exit code 2) unless the operator chooses `--catch-up` (replay the
+  backlog) or `--from-now` (skip it; the audit then shows the gap). A cursor with no
+  timestamps counts as stale.
+- **Evidence:** on 2026-10-07 the stored cursor was 7 days old; a plain start would have
+  replayed a week of Wikimedia history (millions of events at 1,650 to 2,300/min). Live
+  demo: refusal with exit code 2 and zero upstream connections
+  ([`reports/phase2/live_run.md`](../reports/phase2/live_run.md)). 30 minutes is at most
+  about 70,000 events, which the producer catches up in a minute or two.
+- **Cost:** one more flag in operations. The newest timestamp across upstream datacenters
+  is used, so a quiet datacenter (codfw often carries only canaries) is not mistaken for
+  downtime.
+
+## D14. One-day segments and config reconciliation (2026-10-07)
+
+- **Decision:** `segment.ms` = 1 day on all three topics, and `bootstrap` now reconciles the
+  configs of existing topics (incremental alter) instead of only creating missing ones.
+- **Why:** Kafka retains whole segments until their newest record passes `retention.ms`, so
+  records live up to `retention.ms + segment.ms`; with the 7-day broker default that was
+  14 days for a 7-day topic. One-day segments bound it at 8. Without reconciliation the
+  live topics would have kept 7-day segments silently.
+- **Evidence:** live topics reported `updated (segment.ms: 604800000 -> 86400000)` on the
+  first run and `exists` on the second; `tests/test_admin_integration.py` covers both and
+  checks that a partition-count mismatch is refused, never "repaired".

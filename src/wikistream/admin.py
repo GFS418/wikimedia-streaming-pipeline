@@ -4,13 +4,35 @@ from __future__ import annotations
 
 import logging
 
-from confluent_kafka.admin import AdminClient, NewTopic
+from confluent_kafka.admin import (
+    AdminClient,
+    AlterConfigOpType,
+    ConfigEntry,
+    ConfigResource,
+    NewTopic,
+    ResourceType,
+)
 from confluent_kafka.schema_registry import Schema, SchemaRegistryClient
 
 from wikistream.config import Settings, TopicSpec
 from wikistream.contract import SCHEMA_PATH
 
 log = logging.getLogger(__name__)
+
+
+def _reconcile_config(admin: AdminClient, spec: TopicSpec) -> list[str]:
+    """Bring an existing topic's configs to the spec; returns 'key: old -> new' changes."""
+    resource = ConfigResource(ResourceType.TOPIC, spec.name)
+    current = admin.describe_configs([resource])[resource].result(timeout=30)
+    changes = {k: v for k, v in spec.config.items() if k not in current or current[k].value != v}
+    if not changes:
+        return []
+    entries = [
+        ConfigEntry(k, v, incremental_operation=AlterConfigOpType.SET) for k, v in changes.items()
+    ]
+    alter = ConfigResource(ResourceType.TOPIC, spec.name, incremental_configs=entries)
+    admin.incremental_alter_configs([alter])[alter].result(timeout=30)
+    return [f"{k}: {current[k].value if k in current else None} -> {v}" for k, v in changes.items()]
 
 
 def ensure_topic(admin: AdminClient, spec: TopicSpec) -> str:
@@ -22,12 +44,13 @@ def ensure_topic(admin: AdminClient, spec: TopicSpec) -> str:
             raise RuntimeError(
                 f"topic {spec.name} has {have} partitions, expected {spec.partitions}"
             )
-        return "exists"
+        changed = _reconcile_config(admin, spec)
+        return f"updated ({'; '.join(changed)})" if changed else "exists"
     topic = NewTopic(
         spec.name,
         num_partitions=spec.partitions,
         replication_factor=1,  # single local broker
-        config={"retention.ms": str(spec.retention_ms), "cleanup.policy": "delete"},
+        config=spec.config,
     )
     admin.create_topics([topic])[spec.name].result(timeout=30)
     return "created"

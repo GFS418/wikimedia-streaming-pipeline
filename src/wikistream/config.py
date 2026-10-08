@@ -19,6 +19,18 @@ class TopicSpec:
     name: str
     partitions: int
     retention_ms: int
+    # Decision D14: Kafka deletes a segment only when its NEWEST record passes retention.ms,
+    # and rolls segments every segment.ms, so records live up to retention.ms + segment.ms.
+    # The broker default (7 days) let records live 14 days; 1 day bounds it at 8.
+    segment_ms: int = DAY_MS
+
+    @property
+    def config(self) -> dict[str, str]:
+        return {
+            "retention.ms": str(self.retention_ms),
+            "segment.ms": str(self.segment_ms),
+            "cleanup.policy": "delete",
+        }
 
 
 @dataclass(frozen=True)

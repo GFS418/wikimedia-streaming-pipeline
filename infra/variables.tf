@@ -12,8 +12,9 @@ variable "landing_retention_days" {
     # S3 is the consumer's record of progress (D11). If files expired while Kafka still
     # held those offsets, the consumer would re-ingest them. Kafka deletes whole segments
     # once their NEWEST record passes retention.ms, so a record can live up to
-    # retention.ms + segment.ms: 7 + 7 = 14 days for wikistream.recentchange (observed
-    # 2026-10-07: a 9/30 record shared a segment with 10/7 records).
+    # retention.ms + segment.ms (observed 2026-10-07: a 9/30 record shared a segment with
+    # 10/7 records). With segment.ms = 1 day (D14) that is 8 days; the guard keeps 14 so it
+    # still holds if a topic ever falls back to the broker's 7-day segment.ms default.
     condition     = var.landing_retention_days > 14
     error_message = "landing_retention_days must exceed Kafka's worst-case retention of wikistream.recentchange (retention.ms + segment.ms = 14 days)."
   }

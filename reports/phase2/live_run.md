@@ -90,3 +90,17 @@ corrected from `> 7` to `> 14` days (no infrastructure change; 30 days still sat
   in which an interrupted run produces files byte-identical to an uninterrupted one.
 - Evening traffic (about 1,650/min) was 30% below the 2026-09-30 rate; file fill times scale
   accordingly.
+
+## 6. Follow-ups applied the same evening (decisions D13, D14)
+
+- **Topic configs reconciled:** `scripts/bootstrap_kafka.py` reported
+  `updated (segment.ms: 604800000 -> 86400000)` for all three topics, then `exists` on a
+  second run.
+- **Stale-cursor guard, live:** a plain `wikistream-producer --max-seconds 1` at 23:46:11
+  found a cursor 28.4 minutes old (newest position 23:17:45.449), under the 30-minute limit,
+  so it correctly resumed and replayed 189 events in its 1-second run. With
+  `--max-cursor-age-minutes 1` it refused: exit code 2, zero connections to Wikimedia.
+- **Test suite:** 145 tests; consumer integration tests now stop on a condition
+  (`until_caught_up`) instead of a fixed 8-second window, halving suite time to about 37 s.
+  One unexplained failure occurred in 14 suite runs (the output was truncated before the
+  failure summary); the 13 runs since passed, and full output is now kept for every run.
