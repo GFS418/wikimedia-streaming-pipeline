@@ -1,0 +1,60 @@
+# Databricks Asset Bundle: the Lakeflow pipeline, its schema, and the job that refreshes it
+# (decisions P3-1, P3-7). Deploy with `databricks bundle deploy`; everything here is
+# removable with `databricks bundle destroy`.
+
+bundle:
+  name: wikistream
+
+# Only the pipeline folder is uploaded; the rest of the repo stays local.
+sync:
+  paths:
+    - ./pipeline
+
+variables:
+  landing_path:
+    description: Landing prefix written by the local consumer (Terraform output landing_url + recentchange/).
+    default: s3://wikistream-landing-060647991548/landing/recentchange/
+  schedule_pause_status:
+    description: Deployed PAUSED until a manual run was validated (2026-10-08, scripts/verify_bronze.py); now UNPAUSED.
+    default: UNPAUSED
+
+resources:
+  schemas:
+    wikistream_schema:
+      catalog_name: workspace
+      name: wikistream
+      comment: Wikimedia recentchange streaming pipeline (bronze/silver/gold).
+
+  pipelines:
+    wikistream:
+      name: wikistream
+      catalog: workspace
+      schema: ${resources.schemas.wikistream_schema.name}
+      serverless: true
+      continuous: false  # triggered: each job run processes what has landed, then stops
+      channel: CURRENT
+      root_path: ./pipeline
+      libraries:
+        - glob:
+            include: ./pipeline/transformations/**
+      configuration:
+        wikistream.landing_path: ${var.landing_path}
+
+  jobs:
+    wikistream_refresh:
+      name: wikistream-refresh
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 0/30 * * * ?"  # every 30 minutes
+        timezone_id: UTC
+        pause_status: ${var.schedule_pause_status}
+      tasks:
+        - task_key: refresh_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.wikistream.id}
+
+targets:
+  dev:
+    default: true
+    workspace:
+      host: https://dbc-549196d9-4eed.cloud.databricks.com

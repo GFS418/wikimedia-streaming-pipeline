@@ -1,0 +1,17 @@
+.venv
+.git
+.pytest_cache
+.ruff_cache
+.databricks
+logs
+reports
+tests
+docs
+infra
+databricks
+pipeline
+scripts
+**/__pycache__
+*.env
+.env
+credentials*

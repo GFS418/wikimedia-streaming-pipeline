@@ -31,3 +31,6 @@ infra/terraform.tfvars
 *.env
 credentials*
 *.pem
+
+# Long-running capture logs (evidence is summarized in reports/)
+logs/

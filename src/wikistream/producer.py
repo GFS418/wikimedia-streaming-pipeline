@@ -36,7 +36,7 @@ from wikistream.contract import (
     classify,
     upstream_position,
 )
-from wikistream.cursor import cursor_newest_ms, merge_cursors
+from wikistream.cursor import advance, cursor_newest_ms, merge_cursors
 from wikistream.sse import SSEClient
 
 log = logging.getLogger("wikistream.producer")
@@ -174,8 +174,57 @@ class Router:
             self.counts[f"extra_field.{f}"] += 1
 
 
+def _cursor_header(msg) -> str | None:
+    raw = dict(msg.headers() or []).get(H_CURSOR)
+    return raw.decode() if raw else None
+
+
+def _latest_positions_for(
+    consumer: Consumer,
+    topic: str,
+    partition: int,
+    low: int,
+    high: int,
+    missing: set[tuple[str, int]],
+    timeout_s: float,
+    chunk: int = 5000,
+) -> list[str]:
+    """Scan one partition backwards, chunk by chunk, for the latest stored cursors that
+    carry a timestamp for each `missing` upstream topic. Headers only; no decoding."""
+    found: list[str] = []
+    wanted = set(missing)
+    end = high
+    while end > low and wanted:
+        start = max(low, end - chunk)
+        consumer.assign([TopicPartition(topic, partition, start)])
+        best: dict[tuple[str, int], dict] = {}
+        for _ in range(end - start):
+            msg = consumer.poll(timeout_s)
+            if msg is None or msg.error():
+                raise RuntimeError(f"could not scan {topic}[{partition}] at {start}..{end}")
+            cur = _cursor_header(msg)
+            for e in json.loads(cur) if cur else []:
+                key = (e["topic"], int(e["partition"]))
+                if key in wanted and "timestamp" in e:
+                    if key not in best or e["timestamp"] > best[key]["timestamp"]:
+                        best[key] = e
+        if best:
+            found.append(json.dumps(list(best.values())))
+            wanted -= set(best)
+        end = start
+    return found
+
+
 def resume_cursor(settings: Settings, timeout_s: float = 10.0) -> str | None:
-    """Furthest upstream cursor found at the tail of every partition of all our topics."""
+    """Where to resume upstream (decisions B and D22).
+
+    Merge the cursors stored on the last message of every partition of all our topics,
+    taking the furthest position per upstream topic. Cursors written before D22 can say
+    {"offset": -1} for a quiet upstream topic even though its real position sits further
+    back in that partition, while another tail (e.g. the drops ledger) offers an OLDER
+    timestamp. So for every partition whose tail lacks a timestamp for some upstream topic,
+    scan that partition back for its latest one before merging.
+    """
     consumer = Consumer(
         {
             "bootstrap.servers": settings.bootstrap_servers,
@@ -183,7 +232,7 @@ def resume_cursor(settings: Settings, timeout_s: float = 10.0) -> str | None:
             "enable.auto.commit": False,
         }
     )
-    found: list[str] = []
+    tails: list[tuple[str, int, int, int, str | None]] = []
     try:
         md = consumer.list_topics(timeout=timeout_s)
         for spec in settings.all_topics:
@@ -199,9 +248,20 @@ def resume_cursor(settings: Settings, timeout_s: float = 10.0) -> str | None:
                 msg = consumer.poll(timeout_s)
                 if msg is None or msg.error():
                     raise RuntimeError(f"could not read tail of {spec.name}[{p}] at {high - 1}")
-                headers = dict(msg.headers() or [])
-                if H_CURSOR in headers:
-                    found.append(headers[H_CURSOR].decode())
+                tails.append((spec.name, p, low, high, _cursor_header(msg)))
+        found = [cur for *_, cur in tails if cur]
+        upstream = {(e["topic"], int(e["partition"])) for cur in found for e in json.loads(cur)}
+        for topic, p, low, high, cur in tails:
+            missing = upstream - (
+                {(e["topic"], int(e["partition"])) for e in json.loads(cur) if "timestamp" in e}
+                if cur
+                else set()
+            )
+            if missing:
+                log.info(
+                    "%s[%d] tail has no position for %s; scanning back", topic, p, sorted(missing)
+                )
+                found += _latest_positions_for(consumer, topic, p, low, high, missing, timeout_s)
     finally:
         consumer.close()
     return merge_cursors(found)
@@ -278,8 +338,11 @@ def run(
 
     started = last_stats = time.monotonic()
     try:
+        sticky = cursor
         for ev in client.events():
-            router.handle(ev.data, ev.id)
+            sticky = advance(sticky, ev.id)
+            client.last_event_id = sticky  # reconnects resume from the sticky cursor (D22)
+            router.handle(ev.data, sticky)
             now = time.monotonic()
             if now - last_stats >= stats_every_s:
                 log.info(

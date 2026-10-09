@@ -17,6 +17,7 @@ wikistream-consumer = "wikistream.consumer:main"
 [dependency-groups]
 dev = [
     "moto[s3]>=5",
+    "pyspark>=4.1,<4.2",
     "pytest>=8",
     "ruff>=0.6",
 ]
@@ -30,6 +31,8 @@ packages = ["src/wikistream"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The Lakeflow pipeline root is on sys.path in Databricks; mirror that locally.
+pythonpath = ["pipeline"]
 addopts = "-ra"
 markers = ["integration: needs the local Kafka + Schema Registry stack (docker compose up)"]
 filterwarnings = ["ignore:The httpx module is deprecated"]
@@ -37,6 +40,8 @@ filterwarnings = ["ignore:The httpx module is deprecated"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Generated from the .avsc; guarded by tests/test_lake_schema.py, so tools must not reformat it.
+extend-exclude = ["pipeline/wikistream_lake/landing_schema.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
@@ -44,3 +49,5 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.ruff.lint.per-file-ignores]
 # Databricks notebooks: spark/dbutils are injected globals; cells import mid-file.
 "databricks/*.py" = ["F821", "E402"]
+# Lakeflow pipeline sources: `spark` is injected by the pipeline runtime.
+"pipeline/transformations/*.py" = ["F821"]

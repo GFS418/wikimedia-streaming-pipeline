@@ -175,3 +175,64 @@ def test_run_refuses_a_stale_cursor_before_connecting_anywhere(settings, monkeyp
     with pytest.raises(producer_mod.StaleCursor) as exc:
         producer_mod.run(settings, max_seconds=1)
     assert exc.value.age_s > 7 * 24 * 3600
+
+
+CODFW = "codfw.mediawiki.recentchange"
+
+
+def two_dc_cursor(eqiad_ts: int, codfw):
+    codfw_entry = {"topic": CODFW, "partition": 0}
+    codfw_entry |= {"timestamp": codfw} if codfw is not None else {"offset": -1}
+    return json.dumps([{"topic": EQIAD, "partition": 0, "timestamp": eqiad_ts}, codfw_entry])
+
+
+def test_resume_scans_back_past_reset_tails_for_a_quiet_topic(settings):
+    # Cursors written before D22: one early message knows codfw's position, every later
+    # one (after a reconnect) says -1. Resume must recover codfw's real position.
+    bootstrap(settings)
+    real = FIXTURE.read_text().splitlines()
+    p = Producer(producer_config(settings))
+    router = Router(p, settings, make_value_serializer(settings))
+    router.handle(real[0], two_dc_cursor(1_000, 777))
+    for i, data in enumerate(real[1:20], start=1):
+        router.handle(data, two_dc_cursor(1_000 + i, None))
+    # As on 2026-10-09: the drops-ledger tail (a canary) offers an OLDER codfw timestamp.
+    base = json.loads(real[0])
+    canary = json.dumps(base | {"meta": base["meta"] | {"domain": "canary", "id": "c-1"}})
+    router.handle(canary, two_dc_cursor(1_020, 700))
+    assert p.flush(30) == 0
+    positions = {e["topic"]: e for e in json.loads(resume_cursor(settings))}
+    assert positions[CODFW] == {"topic": CODFW, "partition": 0, "timestamp": 777}  # not 700
+    assert positions[EQIAD]["timestamp"] == 1_020
+
+
+def test_running_producer_stamps_and_reconnects_with_the_sticky_cursor(settings, monkeypatch):
+    from wikistream import producer as producer_mod
+    from wikistream.sse import SSEEvent
+
+    bootstrap(settings)
+    real = FIXTURE.read_text().splitlines()
+    ids = [two_dc_cursor(10, None), two_dc_cursor(20, 555), two_dc_cursor(30, None)]
+    clients = []
+
+    class FakeClient:  # stands in for SSEClient: no network
+        def __init__(self, url, user_agent, last_event_id=None, stop=None):
+            self.last_event_id, self.reconnects = last_event_id, 0
+            clients.append(self)
+
+        def events(self):
+            for data, sid in zip(real[:3], ids, strict=True):
+                yield SSEEvent(data=data, id=sid)
+
+    monkeypatch.setattr(producer_mod, "SSEClient", FakeClient)
+    producer_mod.run(settings, max_events=3, from_now=True)
+
+    # Select the third event by key (meta.id): timestamps can tie across partitions.
+    third_id = json.loads(real[2])["meta"]["id"]
+    by_key = {
+        m.key().decode(): dict(m.headers())[H_CURSOR].decode()
+        for m in read_all(settings, settings.main_topic.name, 3)
+    }
+    last = {e["topic"]: e for e in json.loads(by_key[third_id])}
+    assert last[CODFW] == {"topic": CODFW, "partition": 0, "timestamp": 555}  # not -1
+    assert {e["topic"]: e for e in json.loads(clients[0].last_event_id)}[CODFW]["timestamp"] == 555

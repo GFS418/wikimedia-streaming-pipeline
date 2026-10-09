@@ -103,3 +103,43 @@ def test_merge_of_nothing_is_none():
 def test_merge_rejects_malformed_cursor():
     with pytest.raises(ValueError):
         merge_cursors(['{"not": "a list"}'])
+
+
+# ------------------------------------------------------------- sticky cursor (decision D22)
+
+
+def test_advance_keeps_a_quiet_topics_position_through_a_reconnect_reset():
+    # The exact sequence observed 2026-10-08: codfw at 13:21:23.667, then -1 after
+    # reconnect #5 (13:33:45.162) although no codfw event had been consumed since.
+    from wikistream.cursor import advance
+
+    before = cur(
+        {"topic": EQIAD, "partition": 0, "timestamp": 1791465684675},
+        {"topic": CODFW, "partition": 0, "timestamp": 1791465683667},
+    )
+    after_reconnect = cur(
+        {"topic": EQIAD, "partition": 0, "timestamp": 1791466425162},
+        {"topic": CODFW, "partition": 0, "offset": -1},
+    )
+    sticky = advance(advance(None, before), after_reconnect)
+    positions = {e["topic"]: e for e in json.loads(sticky)}
+    assert positions[CODFW] == {"topic": CODFW, "partition": 0, "timestamp": 1791465683667}
+    assert positions[EQIAD]["timestamp"] == 1791466425162
+
+
+def test_advance_from_nothing_is_the_server_id():
+    from wikistream.cursor import advance
+
+    sid = cur({"topic": EQIAD, "partition": 0, "timestamp": 5})
+    assert json.loads(advance(None, sid)) == json.loads(sid)
+
+
+def test_without_timestamp_lists_reset_topics():
+    from wikistream.cursor import without_timestamp
+
+    c = cur(
+        {"topic": EQIAD, "partition": 0, "timestamp": 5},
+        {"topic": CODFW, "partition": 0, "offset": -1},
+    )
+    assert without_timestamp(c) == {(CODFW, 0)}
+    assert without_timestamp(None) == set()

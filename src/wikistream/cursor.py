@@ -53,3 +53,22 @@ def cursor_newest_ms(cursor: str) -> int | None:
     """Newest upstream timestamp in a cursor: roughly when the producer last wrote."""
     stamps = [int(e["timestamp"]) for e in _parse(cursor) if "timestamp" in e]
     return max(stamps) if stamps else None
+
+
+def advance(sticky: str | None, server_id: str | None) -> str | None:
+    """The producer's own cursor, which never regresses (decision D22).
+
+    After every reconnect, EventStreams reports a quiet topic's position as
+    {"offset": -1} until that topic sends an event (observed 2026-10-08 13:33:45, codfw
+    13:21:23.667 -> -1 right after reconnect #5). Resuming from such an id can re-send the
+    quiet topic's events (11 duplicates on 2026-10-09) or skip them. Merging each server id
+    into the previous cursor keeps the last real position of every topic instead.
+    """
+    return merge_cursors([sticky, server_id])
+
+
+def without_timestamp(cursor: str | None) -> set[tuple[str, int]]:
+    """Upstream (topic, partition) entries that carry no timestamp position."""
+    if not cursor:
+        return set()
+    return {(e["topic"], int(e["partition"])) for e in _parse(cursor) if "timestamp" not in e}

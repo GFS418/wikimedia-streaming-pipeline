@@ -12,6 +12,7 @@ services:
   kafka:
     image: apache/kafka:4.3.1
     container_name: wikistream-kafka
+    stop_grace_period: 60s
     ports:
       - "9092:9092"
     environment:
@@ -61,6 +62,48 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  # ---- the capture (decision D23). Started only with the profile:
+  #   docker compose --profile capture up -d --build      start (or resume after a stop)
+  #   docker compose --profile capture stop               stop cleanly (flush, then exit)
+  #   docker compose logs -f producer consumer            follow
+  # Survives app relaunches and closed terminals; restarts after a crash or a Docker restart.
+  producer:
+    profiles: ["capture"]
+    build: .
+    image: wikistream-app:local
+    container_name: wikistream-producer
+    # Unattended policy: always catch up after downtime, within Wikimedia's 7-day history.
+    command: ["wikistream-producer", "--catch-up", "--max-cursor-age-minutes", "10080"]
+    environment:
+      WIKISTREAM_BOOTSTRAP: kafka:29092
+      WIKISTREAM_SCHEMA_REGISTRY: http://schema-registry:8081
+    depends_on:
+      kafka: {condition: service_healthy}
+      schema-registry: {condition: service_healthy}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging: &capture-logging
+      driver: json-file
+      options: {max-size: "20m", max-file: "10"}
+
+  consumer:
+    profiles: ["capture"]
+    image: wikistream-app:local
+    container_name: wikistream-consumer
+    command: ["wikistream-consumer"]
+    environment:
+      WIKISTREAM_BOOTSTRAP: kafka:29092
+      WIKISTREAM_SCHEMA_REGISTRY: http://schema-registry:8081
+      WIKISTREAM_AWS_PROFILE: wikistream-consumer  # upload-only role (D12), assumed in-container
+    volumes:
+      # Read-only: the source profile used to assume the role. Never baked into the image.
+      - ${HOME}/.aws:/home/app/.aws:ro
+    depends_on:
+      producer: {condition: service_started}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging: *capture-logging
 
 volumes:
   kafka-data:
