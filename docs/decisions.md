@@ -315,3 +315,22 @@ Each entry: the decision, the evidence it rests on, and what it costs. Newest la
   windows (10-08 12:34-13:37 and 10-09 02:27-04:12, plus any live time after the backfill).
 - **Why:** the laptop cannot run unattended overnight reliably; the backfill covers every hour
   of the day, including the global traffic low that sets the watermark.
+
+## D24. Gold: 20-minute watermark, fed by silver's change feed (2026-10-09)
+
+- **Decision:** `gold_wiki_minute` aggregates 1-minute event-time windows per wiki with a
+  **20-minute watermark**, excluding rows flagged `historical_event_time`; it streams
+  silver's change feed (inserts only), and the bot share is a plain UC view over it
+  (`sql/views/gold_bot_share_minute.sql`, applied by `scripts/apply_views.py`).
+- **Evidence for 20 minutes:** over a full simulated day validated on live runs
+  ([`reports/phase3/watermark.md`](../reports/phase3/watermark.md)), 15 minutes was the smallest
+  value dropping nothing (worst lateness 12.8 minutes, in the overnight low). The user chose
+  20 for margin: lateness tracks file fill time, which grows as traffic falls, so 20 minutes
+  still covers a night about 35% quieter. Cost: each minute is final 5 minutes later.
+- **Evidence for the source:** reading an AUTO CDC target's change feed inside the same
+  pipeline works (first update 2026-10-09 20:14 UTC). With first-copy-wins (D17) the feed
+  carries only inserts, so every event is counted exactly once by construction.
+- **Verified:** `scripts/verify_gold.py`: all ten metrics identical to silver for 121,198
+  finalized (minute, wiki) pairs, 3,315,752 events; no missing, extra or duplicate keys.
+- **Operational rule:** a full refresh of silver must also refresh gold (a new change-feed
+  stream starts from silver's current snapshot).

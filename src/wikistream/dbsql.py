@@ -43,7 +43,10 @@ def query(sql: str, warehouse_id: str = WAREHOUSE_ID, timeout_s: float = 300) ->
         resp = _api("get", f"/api/2.0/sql/statements/{resp['statement_id']}")
     if resp["status"]["state"] != "SUCCEEDED":
         raise RuntimeError(f"SQL failed: {resp['status']}")
-    cols = [c["name"] for c in resp["manifest"]["schema"]["columns"]]
+    columns = resp.get("manifest", {}).get("schema", {}).get("columns")
+    if not columns:  # DDL and other statements without a result set
+        return []
+    cols = [c["name"] for c in columns]
     rows = resp.get("result", {}).get("data_array", []) or []
     if resp["manifest"].get("total_chunk_count", 1) > 1:
         raise RuntimeError("result spans several chunks; narrow the query")

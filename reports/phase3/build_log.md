@@ -106,3 +106,30 @@ merge fell back to an older codfw timestamp (13:15:00.001, a canary's cursor in 
 tail) and re-sent 13:15 to 13:21. Duplicates are the benign outcome; had no older codfw
 timestamp existed, the resume would have sent codfw = -1, which can skip a quiet topic's events.
 No loss occurred (codfw 193 of 193 accounted), but the cursor logic should not depend on luck.
+
+## Gold (2026-10-09)
+
+Pipeline update 20:14:00 to 20:16:38 UTC added `gold_wiki_minute` (watermark 20 minutes, D24),
+reading silver's change feed in the same pipeline; the flow ran two micro-batches.
+`scripts/verify_gold.py`:
+
+| Check | Result |
+|---|---|
+| Finalized windows | 2026-09-30 23:13 to the frontier 2026-10-09 19:49 UTC (newest event about 20:09, minus 20 min) |
+| (minute, wiki) pairs | 121,198, none missing from gold, none only in gold, no duplicate keys |
+| Events, silver vs gold | 3,315,752 = 3,315,752 |
+| All ten metrics, summed absolute difference | 0 for every metric |
+| Identities: events = sum of type columns; bot + human = edits + new pages | hold on every row |
+| Bot-share view vs gold | 1,900 minutes, 0 disagreeing; overall bot share 38.07% of edits + new pages |
+
+The two micro-batches dropped nothing, consistent with the simulation (no row later than 12.8
+minutes against a 20-minute watermark).
+
+### Capture services, same day
+
+The consumer container crashed twice around 19:10 UTC with `RequestTimeTooSkewed` (S3) and
+`Signature expired` (STS): the Docker VM clock had fallen about 110 s behind after the host
+slept, a known Docker Desktop on macOS behaviour. The restart policy recovered it unaided once
+the clock resynced (skew measured at 0 s afterwards), resuming from S3 at offsets
+1,080,000 / 1,085,000 / 1,080,000. Both services were stopped cleanly at 20:09:29 (exit 0).
+The lateness simulation used data up to 18:20 UTC, before the skew.
