@@ -143,3 +143,125 @@ def test_without_timestamp_lists_reset_topics():
     )
     assert without_timestamp(c) == {(CODFW, 0)}
     assert without_timestamp(None) == set()
+
+
+# ------------------------------------------------- slowest-partition resume (decision D29)
+
+
+def test_slowest_takes_the_earliest_position_per_upstream_topic():
+    from wikistream.cursor import slowest
+
+    tails = [  # one cursor per partition of our topic, as at the 2026-10-10 crash drill
+        cur({"topic": EQIAD, "partition": 0, "timestamp": 820}),
+        cur({"topic": EQIAD, "partition": 0, "timestamp": 983}),
+        cur({"topic": EQIAD, "partition": 0, "timestamp": 798}),
+    ]
+    assert json.loads(slowest(tails)) == [{"topic": EQIAD, "partition": 0, "timestamp": 798}]
+
+
+def test_slowest_ignores_entries_without_a_timestamp_but_keeps_unknown_topics():
+    from wikistream.cursor import slowest
+
+    tails = [
+        cur(
+            {"topic": EQIAD, "partition": 0, "timestamp": 5},
+            {"topic": CODFW, "partition": 0, "offset": -1},
+        ),
+        cur(
+            {"topic": EQIAD, "partition": 0, "timestamp": 9},
+            {"topic": CODFW, "partition": 0, "timestamp": 7},
+        ),
+    ]
+    got = {e["topic"]: e for e in json.loads(slowest(tails))}
+    assert got[EQIAD]["timestamp"] == 5 and got[CODFW]["timestamp"] == 7
+    only_reset = [cur({"topic": CODFW, "partition": 0, "offset": -1})]
+    assert json.loads(slowest(only_reset)) == [{"topic": CODFW, "partition": 0, "offset": -1}]
+    assert slowest([None]) is None
+
+
+# ------------------------------------------------------------------ D31: resume, then verify
+
+
+def test_rewind_moves_timestamps_earlier_and_leaves_offset_entries():
+    from wikistream.cursor import rewind
+
+    c = cur(
+        {"topic": EQIAD, "partition": 0, "timestamp": 1_000},
+        {"topic": CODFW, "partition": 0, "offset": -1},
+    )
+    got = {e["topic"]: e for e in json.loads(rewind(c, 250))}
+    assert got[EQIAD]["timestamp"] == 750
+    assert got[CODFW] == {"topic": CODFW, "partition": 0, "offset": -1}
+    assert rewind(c, 0) == c and rewind(None, 250) is None
+
+
+def test_offsets_header_round_trips():
+    from wikistream.cursor import offsets_header, parse_offsets
+
+    last = {(EQIAD, 0): 6598017958, (CODFW, 0): 2086018072}
+    assert parse_offsets(offsets_header(last)) == last
+
+
+def test_floors_take_the_lowest_tail_and_know_nothing_without_every_header():
+    from wikistream.cursor import floors, offsets_header
+
+    tails = [
+        offsets_header({(EQIAD, 0): 120, (CODFW, 0): 7}),
+        offsets_header({(EQIAD, 0): 117, (CODFW, 0): 9}),
+        offsets_header({(EQIAD, 0): 119}),  # written before codfw was ever seen
+    ]
+    assert floors(tails) == {(EQIAD, 0): 117}  # codfw: unknown in one tail, so unknown
+    assert floors([tails[0], None]) == {}  # a tail from before the header: nothing known
+    assert floors([]) == {}
+
+
+def test_guard_ignores_resends_and_verifies_the_next_offset_after_a_connect():
+    from wikistream.cursor import ResumeGuard
+
+    g = ResumeGuard(base_ms=1_000, max_ms=8_000, floor={(EQIAD, 0): 100})
+    g.on_connect()
+    assert g.admit((EQIAD, 0), 99) == g.RESENT  # the rewound resume re-sends
+    assert g.admit((EQIAD, 0), 100) == g.RESENT
+    assert g.admit((EQIAD, 0), 101) == g.NEW  # exactly the next offset: verified
+    assert g.admit((CODFW, 0), 5) == g.NEW  # never seen: nothing to verify against
+    assert g.counts == {"resume.resent_ignored": 2, "resume.verified": 1}
+    assert json.loads(g.header()) == [
+        {"topic": CODFW, "partition": 0, "offset": 5},
+        {"topic": EQIAD, "partition": 0, "offset": 101},
+    ]
+
+
+def test_guard_rereads_further_back_on_a_skip_and_resets_once_verified():
+    from wikistream.cursor import ResumeGuard
+
+    g = ResumeGuard(base_ms=1_000, max_ms=8_000, floor={(EQIAD, 0): 100})
+    for expected_rewind in (2_000, 4_000):
+        g.on_connect()
+        assert g.admit((EQIAD, 0), 103) == g.REREAD  # 101 and 102 were skipped
+        assert g.rewind_ms == expected_rewind and g.last[(EQIAD, 0)] == 100  # not admitted
+    g.on_connect()
+    assert g.admit((EQIAD, 0), 101) == g.NEW
+    assert g.rewind_ms == 1_000  # back to base after a verified resume
+    assert g.counts["resume.reread"] == 2 and g.counts["resume.verified"] == 1
+
+
+def test_guard_accepts_a_gap_at_the_cap_and_counts_mid_connection_gaps():
+    from wikistream.cursor import ResumeGuard
+
+    g = ResumeGuard(base_ms=1_000, max_ms=4_000, floor={(EQIAD, 0): 100})
+    verdicts = []
+    for _ in range(3):
+        g.on_connect()
+        verdicts.append(g.admit((EQIAD, 0), 102))
+    assert verdicts == [g.REREAD, g.REREAD, g.GAP]  # 2 s, 4 s (the cap), then accepted
+    assert g.last[(EQIAD, 0)] == 102 and g.rewind_ms == 1_000
+    assert g.admit((EQIAD, 0), 105) == g.NEW  # within a connection: counted, not re-read
+    assert g.counts["upstream.offset_gap"] == 2 and g.counts["resume.gap_accepted"] == 1
+
+
+def test_guard_with_no_margin_accepts_every_skip_as_before_d31():
+    from wikistream.cursor import ResumeGuard
+
+    g = ResumeGuard(base_ms=0, max_ms=0, floor={(EQIAD, 0): 100})
+    g.on_connect()
+    assert g.admit((EQIAD, 0), 102) == g.GAP

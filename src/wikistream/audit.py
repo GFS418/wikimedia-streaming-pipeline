@@ -4,6 +4,11 @@ Every upstream offset in the audited range must be accounted for exactly once:
 delivered (main topic) + dead-lettered (DLQ) + deliberately dropped (drops ledger).
 `reconcile` is pure; `collect` reads the topics; `main` is the CLI.
 
+The range per upstream partition is what the live capture wrote in the window. Events repaired
+later (header `backfill`, D31) count towards it, but do not stretch it: they were written
+hours after their neighbours, so a window around the repair would otherwise span back to
+them and report everything in between as missing.
+
     uv run python scripts/audit_topic.py [--since 2026-09-30T23:30:00Z]
 """
 
@@ -23,7 +28,7 @@ from confluent_kafka.serialization import MessageField, SerializationContext
 
 from wikistream.config import Settings
 from wikistream.contract import UpstreamPosition, upstream_position
-from wikistream.producer import H_UP_OFFSET, H_UP_PARTITION, H_UP_TOPIC
+from wikistream.producer import H_BACKFILL, H_UP_OFFSET, H_UP_PARTITION, H_UP_TOPIC
 
 SOURCES = ("main", "dlq", "drops")
 
@@ -33,6 +38,7 @@ class Seen:
     source: str  # main | dlq | drops
     upstream: UpstreamPosition | None
     event_id: str | None = None
+    backfill: bool = False  # re-fetched later from upstream history (D31)
 
 
 def _gap_runs(offsets: list[int]) -> list[tuple[int, int]]:
@@ -49,14 +55,22 @@ def reconcile(seen: Iterable[Seen]) -> dict:
     dup_ids = sum(c - 1 for c in ids.values() if c > 1)
 
     where: dict[tuple[str, int], dict[int, Counter]] = defaultdict(lambda: defaultdict(Counter))
+    live: dict[tuple[str, int], list[int]] = defaultdict(list)
     for s in seen:
         if s.upstream:
             u = s.upstream
             where[(u.topic, u.partition)][u.offset][s.source] += 1
+            if not s.backfill:
+                live[(u.topic, u.partition)].append(u.offset)
 
     upstream = {}
     total_missing = 0
-    for (topic, part), offsets in sorted(where.items()):
+    for (topic, part), all_offsets in sorted(where.items()):
+        if not live[(topic, part)]:
+            upstream[f"{topic}[{part}]"] = {"backfilled_outside_window": len(all_offsets)}
+            continue
+        lo, hi = min(live[(topic, part)]), max(live[(topic, part)])
+        offsets = {o: c for o, c in all_offsets.items() if lo <= o <= hi}
         ordered = sorted(offsets)
         gaps = _gap_runs(ordered)
         missing = sum(b - a + 1 for a, b in gaps)
@@ -73,6 +87,7 @@ def reconcile(seen: Iterable[Seen]) -> dict:
             "gap_runs": gaps[:10],
             "repeated_offsets": repeated,
             "cross_source_conflicts": conflicts,
+            "backfilled_outside_window": len(all_offsets) - len(offsets),
         }
 
     unattributed_dlq = unattributed["dlq"]
@@ -120,8 +135,12 @@ def collect(settings: Settings, since_ms: int | None = None) -> list[Seen]:
     names = dict(zip(SOURCES, (t.name for t in settings.all_topics), strict=True))
     seen: list[Seen] = []
     try:
+        # One snapshot of every topic's range before reading any. Per-topic snapshots let a
+        # canary that reached the drops ledger mid-audit extend the upstream range past the
+        # main topic's end: a false trailing gap (2026-10-10, 535 "missing" offsets).
+        snapshot = {source: _start_offsets(c, topic, since_ms) for source, topic in names.items()}
         for source, topic in names.items():
-            ranges = _start_offsets(c, topic, since_ms)
+            ranges = snapshot[source]
             want = sum(hi - lo for lo, hi in ranges.values())
             if want == 0:
                 continue
@@ -136,17 +155,18 @@ def collect(settings: Settings, since_ms: int | None = None) -> list[Seen]:
                 if m.offset() >= ranges[m.partition()][1]:
                     continue  # arrived after the audit started; out of scope
                 got += 1
+                h = {k: v.decode() for k, v in (m.headers() or [])}
+                repaired = H_BACKFILL in h
                 if source == "main":
                     meta = deser(m.value(), ctx)["meta"]
-                    seen.append(Seen(source, upstream_position(meta), meta["id"]))
+                    seen.append(Seen(source, upstream_position(meta), meta["id"], repaired))
                 else:
-                    h = {k: v.decode() for k, v in (m.headers() or [])}
                     pos = None
                     if H_UP_TOPIC in h:
                         pos = UpstreamPosition(
                             h[H_UP_TOPIC], int(h[H_UP_PARTITION]), int(h[H_UP_OFFSET])
                         )
-                    seen.append(Seen(source, pos))
+                    seen.append(Seen(source, pos, backfill=repaired))
             c.unassign()
     finally:
         c.close()

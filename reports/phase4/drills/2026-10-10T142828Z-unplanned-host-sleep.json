@@ -1,0 +1,48 @@
+{
+  "drill": "unplanned: laptop lid closed overnight (host sleep with brief dark wakes, ~05:50-13:40Z)",
+  "window": "2026-10-10T02:41:17Z .. 2026-10-10T14:10Z",
+  "effects": {
+    "consumer_restarts": 19,
+    "consumer_crash_cause": "Docker VM clock 15-30 min behind after each dark wake; AWS rejected signed requests (RequestTimeTooSkewed, AssumeRole signature expired). Fail-safe: no write with a wrong clock; Kafka buffered; recovered after resync.",
+    "producer_restarts": 0,
+    "sse_reconnects_in_window": 45,
+    "databricks_scheduled_runs": {
+      "SUCCESS": 23,
+      "other": 0
+    }
+  },
+  "verification": {
+    "audit": {
+      "verdict": "unexplained_gaps",
+      "messages_main": 1203212,
+      "drops": 22,
+      "missing_upstream_offsets": 2,
+      "main_duplicate_event_ids": 0
+    },
+    "landing": {
+      "verdict": "ok",
+      "deep_checked": 241,
+      "rederived_identical": 241
+    }
+  },
+  "missing": [
+    {
+      "upstream": "eqiad.mediawiki.recentchange[0]@6598017959",
+      "dt": "2026-10-10T04:06:56.735Z",
+      "previous_event_dt": "2026-10-10T04:06:56.735Z",
+      "at": "SSE reconnect (2.7 s pause)",
+      "still_upstream": true
+    },
+    {
+      "upstream": "eqiad.mediawiki.recentchange[0]@6598832883",
+      "dt": "2026-10-10T11:59:18.183Z",
+      "previous_event_dt": "2026-10-10T11:59:18.183Z",
+      "at": "SSE reconnect (1.5 s pause)",
+      "still_upstream": true
+    }
+  ],
+  "root_cause": "EventStreams ids carry timestamp = event timestamp + 1 ms (2620/2620 live events, incl. 17 out-of-order). Resuming seeks to the first event at or after that time, so not-yet-received events stamped at or before the last event's millisecond are skipped: same-millisecond neighbours (both losses) and out-of-order events (0.74% of 5.28M retained events; max disorder 30.5 s). Affects every reconnect and every restart. Not caused by the sleep: the first loss was at 04:06Z, before it.",
+  "history_scan": "All other gaps in retained Kafka history are deliberate capture pauses (9/30-10/7, 10/7 overnight) or the D29 producer-crash loss (10/10 01:35Z).",
+  "audit_tool_fix": "audit.collect now snapshots all topics' ranges at once (a canary landing mid-audit had faked a 535-offset trailing gap).",
+  "passed": false
+}

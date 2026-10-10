@@ -43,7 +43,9 @@ def _rederive(c: Consumer, deser, ctx, topic: str, p: int, first: int, end: int,
     return encode_file(rows, level)
 
 
-def verify(settings: Settings, s3) -> dict:
+def verify(settings: Settings, s3, since_ms: int | None = None) -> dict:
+    """since_ms: deep-check only files landed at or after it (drills); continuity is always
+    checked across every file."""
     s = settings
     c = Consumer(
         {
@@ -55,13 +57,6 @@ def verify(settings: Settings, s3) -> dict:
     deser = AvroDeserializer(SchemaRegistryClient({"url": s.schema_registry_url}))
     ctx = SerializationContext(s.main_topic.name, MessageField.VALUE)
     topic = s.main_topic.name
-
-    versions: dict[str, int] = defaultdict(int)
-    for page in s3.get_paginator("list_object_versions").paginate(
-        Bucket=s.landing_bucket, Prefix=s.landing_prefix
-    ):
-        for v in page.get("Versions", []):
-            versions[v["Key"]] += 1
 
     report: dict = {"partitions": {}, "failures": []}
     fail = report["failures"].append
@@ -78,8 +73,18 @@ def verify(settings: Settings, s3) -> dict:
                     if parsed is None:
                         fail(f"foreign object in landing prefix: {o['Key']}")
                         continue
-                    objs.append((parsed, o["Key"], o["ETag"].strip('"')))
+                    objs.append(
+                        (parsed, o["Key"], o["ETag"].strip('"'), o["LastModified"].timestamp())
+                    )
             objs.sort()
+            # Versions AFTER the listing: a snapshot taken first missed a file that landed
+            # while earlier partitions were being checked ("0 versions", 2026-10-10).
+            versions: dict[str, int] = defaultdict(int)
+            for page in s3.get_paginator("list_object_versions").paginate(
+                Bucket=s.landing_bucket, Prefix=f"{s.landing_prefix}p{p:02d}/"
+            ):
+                for v in page.get("Versions", []):
+                    versions[v["Key"]] += 1
             part = {
                 "kafka_low": low,
                 "kafka_high": high,
@@ -87,14 +92,18 @@ def verify(settings: Settings, s3) -> dict:
                 "rows": 0,
                 "rederived_identical": 0,
                 "not_rederivable_expired": 0,
+                "deep_checked": 0,
             }
             prev_end = None
-            for i, ((pp, start, end), key, etag) in enumerate(objs):
+            for i, ((pp, start, end), key, etag, landed_s) in enumerate(objs):
                 if pp != p:
                     fail(f"{key}: partition {pp} under p{p:02d}/")
                 if prev_end is not None and start != prev_end + 1:
                     fail(f"p{p}: range gap or overlap before {key} (previous end {prev_end})")
                 prev_end = end
+                if since_ms is not None and landed_s * 1000 < since_ms:
+                    continue  # landed before the window: continuity only
+                part["deep_checked"] += 1
                 if versions[key] != 1:
                     fail(f"{key}: {versions[key]} versions (expected 1 in a clean run)")
 
@@ -135,14 +144,24 @@ def verify(settings: Settings, s3) -> dict:
     report["files"] = sum(x["files"] for x in parts)
     report["rows"] = sum(x["rows"] for x in parts)
     report["rederived_identical"] = sum(x["rederived_identical"] for x in parts)
+    report["deep_checked"] = sum(x["deep_checked"] for x in parts)
     report["verdict"] = "ok" if not report["failures"] else "FAILED"
     return report
 
 
 def main() -> None:
+    import argparse
+    from datetime import datetime
+
     import boto3
 
+    ap = argparse.ArgumentParser(description="Verify landed files against Kafka.")
+    ap.add_argument("--since", help="ISO time; deep-check only files landed after it")
+    args = ap.parse_args()
+    since_ms = None
+    if args.since:
+        since_ms = int(datetime.fromisoformat(args.since.replace("Z", "+00:00")).timestamp() * 1000)
     # Admin (default) profile: the consumer role deliberately cannot read objects.
-    report = verify(Settings(), boto3.client("s3"))
+    report = verify(Settings(), boto3.client("s3"), since_ms)
     print(json.dumps(report, indent=2))
     raise SystemExit(0 if report["verdict"] == "ok" else 1)

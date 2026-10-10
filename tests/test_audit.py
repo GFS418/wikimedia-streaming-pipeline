@@ -62,3 +62,18 @@ def test_upstream_topics_are_reconciled_independently():
     r = reconcile([main(10), main(11), Seen("drops", pos(5000, topic=codfw))])
     assert set(r["upstream"]) == {f"{EQ}[0]", f"{codfw}[0]"}
     assert r["verdict"] == "reconciled"
+
+
+def test_a_backfilled_event_fills_its_gap():
+    r = reconcile([main(1), Seen("main", pos(2), "id-2", backfill=True), main(3)])
+    assert r["verdict"] == "reconciled"
+
+
+def test_a_backfill_outside_the_window_does_not_stretch_it():
+    # Audit a window that starts after the gap the repair filled: the repair (old offset,
+    # written now) must not drag the range back and make everything between look missing.
+    live = [main(o) for o in range(1_000, 1_010)]
+    r = reconcile([*live, Seen("main", pos(17), "id-17", backfill=True)])
+    u = r["upstream"][f"{EQ}[0]"]
+    assert r["verdict"] == "reconciled" and (u["first"], u["last"]) == (1_000, 1_009)
+    assert u["backfilled_outside_window"] == 1

@@ -3,7 +3,10 @@
 For every window gold has finalized (window_end at or before gold's newest window_end), the
 ten gold metrics per (window, wiki) must equal the same aggregation computed directly from
 silver (historical rows excluded). Any shortfall is a row the watermark dropped as late.
-Also checks gold's own identities and key uniqueness, and that the bot-share view agrees.
+Rows repaired in later by scripts/backfill_upstream.py (Kafka header `backfill`) arrive
+hours after their minute closed, so gold drops them by design: they are left out of the
+comparison and reported on their own. Also checks gold's own identities and key uniqueness,
+and that the bot-share view agrees.
 
     uv run python scripts/verify_gold.py
 """
@@ -44,6 +47,7 @@ SILVER_AGG = f"""
       AS bytes_removed
   FROM {S}.silver_recentchange
   WHERE NOT array_contains(dq_flags, 'historical_event_time')
+    AND NOT map_contains_key(kafka_headers, 'backfill')
   GROUP BY 1, 2"""
 
 
@@ -83,7 +87,17 @@ def main() -> None:
       JOIN (SELECT window_start, sum(bot_changes) AS bot FROM {S}.gold_wiki_minute
             GROUP BY 1) g USING (window_start)""")[0]
 
-    report = {"reconciliation": r, "gold_identities": ident, "bot_share_view": view}
+    backfilled = query(f"""
+      SELECT count(*) AS rows, min(event_time) AS first_event_time,
+        max(event_time) AS last_event_time
+      FROM {S}.silver_recentchange WHERE map_contains_key(kafka_headers, 'backfill')""")[0]
+
+    report = {
+        "reconciliation": r,
+        "gold_identities": ident,
+        "bot_share_view": view,
+        "backfilled_rows_late_by_design": backfilled,
+    }
     failures = [k for k, v in r.items() if k.startswith("diff_") and int(v or 0) != 0]
     failures += [k for k in ("pairs_missing_in_gold", "pairs_only_in_gold") if int(r[k])]
     failures += [k for k, v in ident.items() if k != "gold_rows" and int(v)]

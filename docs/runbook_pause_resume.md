@@ -67,3 +67,22 @@ deployed**. On resume, before restarting the capture: run `tests/test_silver_rul
 `databricks bundle deploy --var="schedule_pause_status=PAUSED"`, then
 `databricks bundle run wikistream --full-refresh silver_checked --full-refresh silver_recentchange --full-refresh silver_quarantine`,
 then `scripts/verify_silver.py` (expect the historical rows in silver, flagged).
+
+## Backfill: repair named events from upstream history (D31)
+
+When an audit finds upstream offsets missing and the events are still in Wikimedia's history
+(7 days), re-fetch exactly those events. Only the gaps; never a range already captured.
+
+1. Find each missing offset and its time: `uv run python scripts/audit_topic.py --since ...`
+   lists the gap runs; the time of the event just before a gap is close enough.
+2. Stop the producer, so the partition tails hold still while their resume headers are copied:
+   `docker compose --profile capture stop -t 60 producer`
+3. Backfill (safe to re-run; events already in Kafka are skipped):
+   ```bash
+   uv run python scripts/backfill_upstream.py 'eqiad.mediawiki.recentchange[0]@6598017959=2026-10-10T04:06:56.735Z'
+   ```
+4. Start the producer: `docker compose --profile capture up -d producer`.
+5. Audit the window again (0 missing), then after the next pipeline run `verify_bronze`,
+   `verify_silver` and `verify_gold`. Repaired rows carry the Kafka header `backfill`; gold
+   drops them by design (they arrive long after their minute closed) and `verify_gold`
+   reports them as `backfilled_rows_late_by_design`. Exclude them from lateness analysis too.

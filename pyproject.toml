@@ -13,6 +13,7 @@ dependencies = [
 [project.scripts]
 wikistream-producer = "wikistream.producer:main"
 wikistream-consumer = "wikistream.consumer:main"
+wikistream-monitor = "wikistream.monitor:main"
 
 [dependency-groups]
 dev = [

@@ -334,3 +334,126 @@ Each entry: the decision, the evidence it rests on, and what it costs. Newest la
   finalized (minute, wiki) pairs, 3,315,752 events; no missing, extra or duplicate keys.
 - **Operational rule:** a full refresh of silver must also refresh gold (a new change-feed
   stream starts from silver's current snapshot).
+
+## D25. Failure drills: deterministic crash points and random hard kills (2026-10-10)
+
+- **Decision (user):** both. `src/wikistream/faults.py` hard-exits (`os._exit(137)`, no
+  cleanup, as SIGKILL) at the n-th hit of a named point (`consumer.before_put`,
+  `consumer.after_put`, `consumer.mid_range`, `producer.after_produce`) when
+  `WIKISTREAM_CRASH_AT` is set; inert otherwise (tests prove both). Random `docker kill -s
+  KILL` of producer, consumer and Kafka (soak) adds realism. `scripts/drill.py` runs each
+  drill, waits for unaided recovery, and verifies; reports in `reports/phase4/drills/`.
+- **Why both:** crash points reproduce exact windows (before/after an upload, mid-range,
+  unflushed producer queue) that random kills would hit only by chance; random kills test
+  the combinations nobody scripted.
+- **Supporting changes:** Kafka and the registry got `restart: unless-stopped` so a hard kill
+  recovers without a human; the producer refuses to start unless its exact schema is
+  registered (exit 3), which the negative schema drill relies on.
+
+## D26. Replay drill: Kafka to landing (2026-10-10)
+
+- **Decision (user):** replay scope is Kafka to landing: re-derive every landed file from its
+  Kafka offsets and compare bytes (`verify_landing`, which already does this per file). The
+  lakehouse layers' determinism is already evidenced by the silver full refresh of
+  2026-10-09 (135,000 = 135,000, `reports/phase3/build_log.md`).
+
+## D27. Schema-evolution drill: a real field, plus a rejected change (2026-10-10)
+
+- **Decision (user):** v2 of the contract adds optional `producer_received_ms`
+  (`schemas/recentchange-v2.avsc`), rolled out readers first (pipeline, then producer),
+  and every layer must reconcile with v1 rows null in the new column. Negative drill: v1
+  minus the required `wiki` (`schemas/drills/recentchange-v2-incompatible.avsc`) must be
+  rejected by the registry, and a producer built on it must refuse to start.
+- **Pre-check (dry run, nothing registered):** the live registry reports v2 compatible
+  (`True`) and the incompatible version not (`False`) under FULL_TRANSITIVE.
+
+## D28. Monitor service in Docker compose (2026-10-10)
+
+- **Decision (user):** a `monitor` compose service (`src/wikistream/monitor.py`) logs one JSON
+  health line per minute and ALERT/CLEARED lines: producer stalled (> 120 s), upstream lag
+  (> 300 s), landing backlog (>= 2 files on a partition), landing stalled (> 30 min), new
+  dead letters. Thresholds come from measured behavior; rules are unit-tested.
+
+## D29. Resume from the slowest partition; rare writes synchronous; delivery failure fatal (2026-10-10)
+
+- **Found by:** the producer crash drill (`producer.after_produce:500`): 104 upstream offsets
+  missing. Root cause, verified: at the crash, the three partitions had delivered up to
+  upstream 820 (p0), 983 (p1) and 798 (p2); all 104 lost events belong to p0 (47) and p2
+  (57), none behind its own partition's tail (per-partition order held). The resume took the
+  FURTHEST tail (983, decision B's rule) and so skipped p0's and p2's unflushed tails.
+- **Decision:** resume from the slowest main-topic partition (`cursor.slowest`): each
+  partition is delivered in order, so anything lost follows its tail. Cost: what faster
+  partitions already delivered is re-sent (duplicates bounded by the in-flight window,
+  removed by silver, D17), which is decision A's at-least-once. Dead-letter and drops-ledger
+  writes are flushed synchronously (rare, so free) because their sparse tails cannot take part
+  in the rule; any delivery failure is fatal (stop, restart, re-fetch) instead of letting later
+  deliveries move the cursor past a lost message.
+- **Tests:** the drill's exact positions (820, 983, 798 -> resume at 798; fails with the old
+  rule, checked), `cursor.slowest` unit tests, and the two resume tests re-derived from each
+  input's partition.
+
+## Correction to D3 (2026-10-10): our partitioner is CRC32, not murmur2
+
+- The probe's partition-skew figures (key = wiki: 36.2% on one of 6 partitions) used Java
+  Kafka's murmur2. librdkafka's default (`consistent_random`) hashes keys with CRC32: on 6,000
+  live messages CRC32 % 3 matched the partition every time, murmur2 matched 2,060 (chance).
+  The conclusion stands for any hash (commonswiki alone is 31% of events, so keying by wiki
+  concentrates load); the exact percentages describe a different partitioner.
+
+## D30. Hard kills that the restart policy actually handles (2026-10-10)
+
+- **Found by:** the first Kafka kill drill. `docker kill -s KILL` counts as an operator stop,
+  so `restart: unless-stopped` deliberately left Kafka down: 10 min 45 s, the producer
+  crash-looping (34 restarts) until a manual `docker compose up`. The audit across that
+  unplanned outage still reconciled (0 missing, 17 duplicates, 6 landed files re-derived
+  identical), but a soak built on `docker kill` would have tested the operator, not the
+  system.
+- **Decision:** every service runs under an init process (`init: true`, tini as PID 1), and
+  drills kill the service process from inside its container (`docker exec <c> sh -c 'kill -9
+  -1'`). tini sees its child die and exits 137, Docker records a crash, and the restart
+  policy brings the container back (about 1 s). tini also forwards SIGTERM and reaps zombies.
+- **Also:** every drill now waits until each partition has landed a file past the failure, so
+  the files that straddle it are re-derived (the first Kafka kill drill had checked 0 files);
+  the recovery check treats broker errors while Kafka restarts as "not yet".
+
+## D31. Resume by timestamp, verify by offset; repair from upstream history (2026-10-10)
+
+- **Found by:** the audit after the laptop slept overnight: 2 of 1.2M upstream offsets missing
+  (`reports/phase4/drills/2026-10-10T142828Z-unplanned-host-sleep.json`). Both were lost at a
+  reconnect, each stamped in the same millisecond as the last event received before it. The
+  first was at 04:06 UTC, before the sleep: the flaw is in the resume, not the sleep.
+- **Root cause:** an EventStreams id carries, per upstream partition, the event's timestamp
+  **plus 1 ms** (2,620 of 2,620 live events, out-of-order ones included), and a resume starts
+  at the earliest event stamped at or after it. Our cursor is the highest such value received
+  (D22), so a resume starts just past the newest timestamp seen and skips every event not yet
+  received that is stamped at or before it: same-millisecond neighbours (both losses) and
+  out-of-order events (0.76% of 5.7M eqiad events run backwards, at most 30.5 s). Decision A's
+  premise, that a timestamp resume can only re-send, was wrong. Exposure: every reconnect
+  (about 70 per 12 h) and every restart; measured loss 2 events in about 2.5 days.
+- **Options:** (1) resume 1 ms early; (2) resume 60 s early and ignore re-sent events by
+  upstream offset; (3) resume a little early, ignore re-sends, and verify that each upstream
+  partition continues at exactly the next offset, re-reading further back if not. **User
+  chose (3), and to backfill the two events.** Correction made while building it: (1) alone
+  would also have covered out-of-order events, because resuming even 1 ms early lands at or
+  before the event holding the newest timestamp, which was itself received. What (3) adds is
+  no duplicates from reconnects, a check on every resume, and recovery if the service's
+  resume rule ever differs from what we observed.
+- **Built:** `cursor.rewind` (1 s, margin over the 1 ms needed), `cursor.ResumeGuard` (ignore
+  at or below the newest offset handled; after each connect the next offset must be exactly
+  one more, else double the rewind and re-read, up to 10 minutes, then accept and count the
+  gap); a new header `upstream_offsets` on every main message (newest offset handled per
+  upstream partition), so a restart knows what is surely in Kafka: the minimum over the
+  partition tails (`cursor.floors`; each partition is delivered in order). Counters
+  `resume.verified`, `resume.resent_ignored`, `resume.reread`, `resume.gap_accepted` and
+  `upstream.offset_gap` appear in the producer's stats line.
+- **Tests:** a local fake EventStreams with the observed id and resume rules
+  (`tests/fake_eventstreams.py`) reproduces the overnight loss exactly with the old
+  behaviour; a 1 ms and the 1 s rewind lose and duplicate nothing; an id rule of +8 ms instead
+  of +1 is healed by re-reads; a gap missing upstream is accepted at the cap; a restart
+  re-sends only what lies between the lowest and highest tails. Mutation checks: removing the
+  rewind, the offset check or the restart floors each fails its tests.
+- **Repair:** `scripts/backfill_upstream.py` re-fetches named events from Wikimedia's 7-day
+  history and routes them through the producer's own Router with a `backfill` header and the
+  resume headers of the partition tail they join. Idempotent (an event already in Kafka is
+  skipped). Gold drops repaired rows by design (they arrive hours after their minute closed);
+  `verify_gold` reports them separately.

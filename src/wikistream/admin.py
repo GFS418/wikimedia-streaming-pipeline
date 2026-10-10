@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import time
 
+from confluent_kafka import KafkaError, KafkaException
 from confluent_kafka.admin import (
     AdminClient,
     AlterConfigOpType,
@@ -52,8 +54,25 @@ def ensure_topic(admin: AdminClient, spec: TopicSpec) -> str:
         replication_factor=1,  # single local broker
         config=spec.config,
     )
-    admin.create_topics([topic])[spec.name].result(timeout=30)
-    return "created"
+    try:
+        admin.create_topics([topic])[spec.name].result(timeout=30)
+        return "created"
+    except KafkaException as exc:
+        if exc.args[0].code() != KafkaError.TOPIC_ALREADY_EXISTS:
+            raise
+    # It exists although metadata did not list it: metadata can lag a creation, notably just
+    # after a broker start (caught 2026-10-10 by test_partition_mismatch_..., 21 s after a
+    # restart). Wait until it is visible, then treat it like any existing topic.
+    _wait_visible(admin, spec.name)
+    return ensure_topic(admin, spec)
+
+
+def _wait_visible(admin: AdminClient, name: str, timeout_s: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while name not in admin.list_topics(timeout=10).topics:
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"topic {name} exists but never became visible in metadata")
+        time.sleep(0.5)
 
 
 def ensure_schema(

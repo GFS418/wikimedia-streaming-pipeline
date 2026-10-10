@@ -34,6 +34,7 @@ from confluent_kafka.serialization import MessageField, SerializationContext
 
 from wikistream.config import Settings
 from wikistream.contract import canonical_json
+from wikistream.faults import crash_point
 
 log = logging.getLogger("wikistream.consumer")
 
@@ -189,7 +190,9 @@ class LandingConsumer:
     def _land(self, buf: RangeBuffer) -> None:
         key = object_key(self.s.landing_prefix, buf.partition, buf.start, buf.end)
         body = encode_file(buf.rows, self.s.gzip_level)
+        crash_point("consumer.before_put")  # Phase 4 drills; inert unless configured
         put_file(self.s3, self.s.landing_bucket, key, body)
+        crash_point("consumer.after_put")
         self.counts["files"] += 1
         self.counts["rows"] += len(buf.rows)
         self.counts["bytes"] += len(body)
@@ -235,7 +238,9 @@ class LandingConsumer:
                     raise KafkaException(msg.error())
                 buf = self.buffers[msg.partition()]
                 row = envelope(msg, self.deser(msg.value(), self.ctx))
-                if buf.add(msg.offset(), row):
+                complete = buf.add(msg.offset(), row)
+                crash_point("consumer.mid_range")
+                if complete:
                     self._land(buf)
                     self.buffers[msg.partition()] = self._new_buffer(msg.partition(), buf.end + 1)
                     if max_files and self.counts["files"] >= max_files:

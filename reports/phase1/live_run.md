@@ -34,6 +34,9 @@ that is why the codfw position appears in the resume cursor.
 - Zero duplicates at one restart is one observation, not a guarantee; the at-least-once
   claim (decision A) stands, and the Phase 4 kill drill measures it under a hard kill
   rather than a clean stop.
+  *Update 2026-10-10: the claim did not fully stand. A timestamp resume could also skip
+  events (2 lost in about 2.5 days); fixed and verified per resume in D31
+  (docs/decisions.md).*
 - The audit could not explain the canary gap on its own; it took a manual upstream replay.
 
 ## Run 3: after adding the drops ledger (decision D8)
