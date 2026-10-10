@@ -1,0 +1,65 @@
+{
+  "drill": "crash consumer.mid_range:2500",
+  "started": "2026-10-10T01:59:41Z",
+  "before": {
+    "kafka_highs": {
+      "0": 1327258,
+      "1": 1331792,
+      "2": 1329170
+    },
+    "landed_ends": {
+      "0": 1324999,
+      "1": 1329999,
+      "2": 1324999
+    }
+  },
+  "crash": {
+    "exit_code": 137,
+    "line": "CRASH POINT consumer.mid_range #2500: os._exit(137)",
+    "seconds_to_crash": 2,
+    "state_at_crash": {
+      "kafka_highs": {
+        "0": 1327310,
+        "1": 1331838,
+        "2": 1329217
+      },
+      "landed_ends": {
+        "0": 1324999,
+        "1": 1329999,
+        "2": 1324999
+      }
+    }
+  },
+  "recovered_in_s": 314,
+  "after": {
+    "kafka_highs": {
+      "0": 1330691,
+      "1": 1335148,
+      "2": 1332641
+    },
+    "landed_ends": {
+      "0": 1329999,
+      "1": 1334999,
+      "2": 1329999
+    }
+  },
+  "verification": {
+    "audit": {
+      "verdict": "reconciled",
+      "messages": {
+        "main": 10172
+      },
+      "missing_upstream_offsets": 0,
+      "main_duplicate_event_ids": 0
+    },
+    "landing": {
+      "verdict": "ok",
+      "deep_checked": 3,
+      "rederived_identical": 3,
+      "failures": []
+    },
+    "passed": true
+  },
+  "passed": true,
+  "log_tail": "/app/.venv/lib/python3.12/site-packages/authlib/integrations/httpx_client/assertion_client.py:5: AuthlibDeprecationWarning: The httpx module is deprecated; please use httpx2 instead.\n  from ._compat import httpx2\n2026-10-10 01:59:44,307 INFO botocore.credentials Found credentials in shared credentials file: ~/.aws/credentials\n2026-10-10 01:59:45,047 INFO wikistream.consumer p0: resume at offset 1325000 (last landed end: 1324999)\n2026-10-10 01:59:45,154 INFO wikistream.consumer p1: resume at offset 1330000 (last landed end: 1329999)\n2026-10-10 01:59:45,260 INFO wikistream.consumer p2: resume at offset 1325000 (last landed end: 1324999)\n2026-10-10 01:59:45,279 INFO httpx HTTP Request: GET http://schema-registry:8081/associations/resources/-/wikistream.recentchange?resourceType=topic&associationType=value \"HTTP/1.1 200 OK\"\n2026-10-10 01:59:45,281 INFO httpx HTTP Request: GET http://schema-registry:8081/schemas/ids/53?subject=wikistream.recentchange-value \"HTTP/1.1 200 OK\"\nCRASH POINT consumer.mid_range #2500: os._exit(137)"
+}

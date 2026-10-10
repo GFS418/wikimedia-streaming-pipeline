@@ -1,0 +1,108 @@
+{
+  "drill": "cancel a pipeline update mid-run, then run another",
+  "started": "2026-10-10T02:34:04Z",
+  "cancelled_update": {
+    "id": "e7a5cc34-4263-4d64-9951-eaa4856635d8",
+    "final_state": "CANCELED"
+  },
+  "next_update": {
+    "id": "df88aa85-d098-4818-9417-c4e3f892a8b0",
+    "final_state": "COMPLETED"
+  },
+  "checks": {
+    "verify_bronze.py": {
+      "exit_code": 0,
+      "report": {
+        "files_expected": 808,
+        "files_in_bronze": 809,
+        "rows": 4045000,
+        "rows_expected_from_files": 4045000,
+        "duplicate_offsets": 0,
+        "producer_duplicate_event_ids": 72,
+        "rescued_rows": 0,
+        "failures": [],
+        "verdict": "ok"
+      },
+      "stderr_tail": ""
+    },
+    "verify_silver.py": {
+      "exit_code": 0,
+      "report": {
+        "counts": {
+          "bronze_rows": 4045000,
+          "bronze_distinct_ids": 4044928,
+          "silver_rows": 4044928,
+          "silver_distinct_ids": 4044928,
+          "quarantine_rows": 0,
+          "duplicates_dropped": 72,
+          "ids_in_both": 0,
+          "not_first_copy": 0
+        },
+        "silver_dq_flags": {
+          "historical_event_time": 28
+        },
+        "quarantine_by_rule": {},
+        "expectation_metrics": {
+          "event_time_valid": {
+            "passed": 4045000,
+            "failed": 0
+          },
+          "non_negative_lengths": {
+            "passed": 4045000,
+            "failed": 0
+          },
+          "structure_by_type": {
+            "passed": 4045000,
+            "failed": 0
+          },
+          "wiki_name_format": {
+            "passed": 4045000,
+            "failed": 0
+          }
+        },
+        "failures": [],
+        "verdict": "ok"
+      },
+      "stderr_tail": ""
+    },
+    "verify_gold.py": {
+      "exit_code": 0,
+      "report": {
+        "reconciliation": {
+          "gold_frontier": "2026-10-10T02:15:00.000Z",
+          "gold_first_window": "2026-09-30T23:13:00.000Z",
+          "window_wiki_pairs": "141891",
+          "pairs_missing_in_gold": "0",
+          "pairs_only_in_gold": "0",
+          "silver_events_finalized": "4016011",
+          "gold_events_finalized": "4016011",
+          "diff_events": "0",
+          "diff_edits": "0",
+          "diff_new_pages": "0",
+          "diff_log_events": "0",
+          "diff_categorize_events": "0",
+          "diff_other_events": "0",
+          "diff_bot_changes": "0",
+          "diff_human_changes": "0",
+          "diff_bytes_added": "0",
+          "diff_bytes_removed": "0"
+        },
+        "gold_identities": {
+          "gold_rows": "141891",
+          "duplicate_keys": "0",
+          "events_identity_broken": "0",
+          "change_identity_broken": "0"
+        },
+        "bot_share_view": {
+          "minutes": "2286",
+          "minutes_disagreeing": "0",
+          "overall_bot_share": "0.3918"
+        },
+        "failures": [],
+        "verdict": "ok"
+      },
+      "stderr_tail": ""
+    }
+  },
+  "passed": true
+}

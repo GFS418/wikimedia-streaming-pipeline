@@ -1,0 +1,81 @@
+{
+  "drill": "kill -9 kafka",
+  "started": "2026-10-10T02:31:44Z",
+  "before": {
+    "kafka_highs": {
+      "0": 1345724,
+      "1": 1350239,
+      "2": 1347761
+    },
+    "landed_ends": {
+      "0": 1344999,
+      "1": 1349999,
+      "2": 1344999
+    },
+    "container": {
+      "status": "running",
+      "exit_code": 0,
+      "restarts": 2
+    }
+  },
+  "kill": {
+    "exit_codes": [
+      137
+    ],
+    "back_running_after_s": 1.1
+  },
+  "recovered_in_s": 568,
+  "after": {
+    "kafka_highs": {
+      "0": 1350679,
+      "1": 1355115,
+      "2": 1352735
+    },
+    "container": {
+      "status": "running",
+      "exit_code": 0,
+      "restarts": 3
+    },
+    "others": {
+      "producer": {
+        "status": "running",
+        "exit_code": 0,
+        "restarts": 0
+      },
+      "consumer": {
+        "status": "running",
+        "exit_code": 0,
+        "restarts": 0
+      },
+      "kafka": {
+        "status": "running",
+        "exit_code": 0,
+        "restarts": 3
+      },
+      "schema-registry": {
+        "status": "running",
+        "exit_code": 0,
+        "restarts": 0
+      }
+    }
+  },
+  "kafka_not_truncated": true,
+  "verification": {
+    "audit": {
+      "verdict": "reconciled",
+      "messages": {
+        "main": 16205
+      },
+      "missing_upstream_offsets": 0,
+      "main_duplicate_event_ids": 0
+    },
+    "landing": {
+      "verdict": "ok",
+      "deep_checked": 4,
+      "rederived_identical": 4,
+      "failures": []
+    },
+    "passed": true
+  },
+  "passed": true
+}

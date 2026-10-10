@@ -1,0 +1,65 @@
+{
+  "drill": "crash producer.after_produce:500",
+  "started": "2026-10-10T01:35:26Z",
+  "before": {
+    "kafka_highs": {
+      "0": 1313619,
+      "1": 1317987,
+      "2": 1315615
+    },
+    "landed_ends": {
+      "0": 1309999,
+      "1": 1314999,
+      "2": 1314999
+    }
+  },
+  "crash": {
+    "exit_code": 137,
+    "line": "CRASH POINT producer.after_produce #500: os._exit(137)",
+    "seconds_to_crash": 6,
+    "state_at_crash": {
+      "kafka_highs": {
+        "0": 1313721,
+        "1": 1318157,
+        "2": 1315737
+      },
+      "landed_ends": {
+        "0": 1309999,
+        "1": 1314999,
+        "2": 1314999
+      }
+    }
+  },
+  "recovered_in_s": 3,
+  "after": {
+    "kafka_highs": {
+      "0": 1313735,
+      "1": 1318177,
+      "2": 1315747
+    },
+    "landed_ends": {
+      "0": 1309999,
+      "1": 1314999,
+      "2": 1314999
+    }
+  },
+  "verification": {
+    "audit": {
+      "verdict": "unexplained_gaps",
+      "messages": {
+        "main": 393
+      },
+      "missing_upstream_offsets": 104,
+      "main_duplicate_event_ids": 0
+    },
+    "landing": {
+      "verdict": "ok",
+      "deep_checked": 0,
+      "rederived_identical": 0,
+      "failures": []
+    },
+    "passed": false
+  },
+  "passed": false,
+  "log_tail": "/app/.venv/lib/python3.12/site-packages/authlib/integrations/httpx_client/assertion_client.py:5: AuthlibDeprecationWarning: The httpx module is deprecated; please use httpx2 instead.\n  from ._compat import httpx2\n2026-10-10 01:36:32,653 INFO httpx HTTP Request: POST http://schema-registry:8081/subjects/wikistream.recentchange-value?normalize=False&deleted=False \"HTTP/1.1 200 OK\"\n2026-10-10 01:36:32,654 INFO wikistream.producer contract recentchange-v1.avsc registered as schema id 53\n2026-10-10 01:36:32,654 INFO wikistream.producer starting from cursor [{\"partition\":0,\"timestamp\":1791594900001,\"topic\":\"codfw.mediawiki.recentchange\"},{\"partition\":0,\"timestamp\":1791596126989,\"topic\":\"eqiad.mediawiki.recentchange\"}] (--catch-up)\n2026-10-10 01:36:33,110 INFO httpx HTTP Request: GET https://stream.wikimedia.org/v2/stream/recentchange \"HTTP/1.1 200 OK\"\n2026-10-10 01:36:33,117 INFO httpx HTTP Request: GET http://schema-registry:8081/associations/resources/-/wikistream.recentchange?resourceType=topic&associationType=value \"HTTP/1.1 200 OK\"\n2026-10-10 01:36:33,123 INFO httpx HTTP Request: POST http://schema-registry:8081/subjects/wikistream.recentchange-value?normalize=False&deleted=False \"HTTP/1.1 200 OK\"\nCRASH POINT producer.after_produce #500: os._exit(137)"
+}

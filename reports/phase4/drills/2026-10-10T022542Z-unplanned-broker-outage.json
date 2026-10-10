@@ -1,0 +1,49 @@
+{
+  "drill": "unplanned: broker down 10 min 45 s while the producer crash-looped",
+  "how": "drill.py kill --target kafka used `docker kill -s KILL`; Docker records that as an operator stop, so `restart: unless-stopped` left Kafka down until a manual `docker compose up -d --wait kafka`. The kill drill itself timed out (no report).",
+  "broker_down": "2026-10-10T02:07:55.072Z",
+  "broker_back": "2026-10-10T02:18:39.841Z",
+  "producer_restarts_during_outage": 34,
+  "recovered_in_s_after_broker_back": 35,
+  "containers_now": {
+    "producer": {
+      "status": "running",
+      "exit_code": 0,
+      "restarts": 34
+    },
+    "consumer": {
+      "status": "running",
+      "exit_code": 0,
+      "restarts": 0
+    },
+    "kafka": {
+      "status": "running",
+      "exit_code": 0,
+      "restarts": 0
+    },
+    "schema-registry": {
+      "status": "running",
+      "exit_code": 0,
+      "restarts": 0
+    }
+  },
+  "verification": {
+    "audit": {
+      "verdict": "reconciled",
+      "messages": {
+        "main": 33043,
+        "drops": 2
+      },
+      "missing_upstream_offsets": 0,
+      "main_duplicate_event_ids": 17
+    },
+    "landing": {
+      "verdict": "ok",
+      "deep_checked": 6,
+      "rederived_identical": 6,
+      "failures": []
+    },
+    "passed": true
+  },
+  "passed": true
+}
